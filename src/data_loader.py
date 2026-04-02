@@ -44,8 +44,14 @@ def _process_and_merge_district_data(target_df: pd.DataFrame, district_file_path
         return target_df, [], f"Error reading District file: {e}"
 
     # 2. Normalize District Data with Robust Column Mapping
-    if '주소시' in df_district.columns:
-        df_district['full_address'] = df_district[['주소시', '주소군구', '주소동']].astype(str).agg(' '.join, axis=1)
+    # Standardize column names to NFC for consistent indexing across OS (Mac/Linux)
+    df_district.columns = [unicodedata.normalize('NFC', str(c)).strip() for c in df_district.columns]
+    
+    # Try to combine specific address components if '주소시' exists
+    addr_parts = [c for c in ['주소시', '주소군구', '주소동'] if c in df_district.columns]
+    if addr_parts:
+        # Avoid TypeError if columns are not found by checking existence first
+        df_district['full_address'] = df_district[addr_parts].astype(str).agg(' '.join, axis=1)
     else:
         # Try candidate names for address
         addr_col = next((c for c in df_district.columns if any(p in c for p in ['설치주소', '도로명주소', '소재지주소', '주소'])), None)

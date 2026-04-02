@@ -1200,14 +1200,8 @@ error = None
 if uploaded_dist:
     if data_source == "파일 업로드 (File)" and uploaded_zip:
         with st.spinner("🚀 파일 분석 및 매칭중..."):
-             # [FIX] Smart Cache Invalidation
-             # Pass mtime if it's a local file path to force re-run on file update
-             dist_mtime = None
-             if isinstance(uploaded_dist, str) and os.path.exists(uploaded_dist):
-                 dist_mtime = os.path.getmtime(uploaded_dist)
-                 
              # [FIX] Unpack 4 values (df, mgr_info, error, stats)
-             raw_df, mgr_info_list, error, stats = data_loader.load_and_process_data(uploaded_zip, uploaded_dist, salt=dist_mtime)
+             raw_df, mgr_info_list, error, stats = data_loader.load_and_process_data(uploaded_zip, uploaded_dist)
              
              if stats:
                  # [FEATURE] Store data stats in session state for later "Help" (?) query
