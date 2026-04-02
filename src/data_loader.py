@@ -90,41 +90,50 @@ def _process_and_merge_district_data(target_df: pd.DataFrame, district_file_path
     target_df['소재지전체주소_norm'] = target_df['소재지전체주소'].astype(str).apply(normalize_address)
     target_df = target_df.dropna(subset=['소재지전체주소_norm'])
 
-    # 4. Batch Matching Logic
+    # 4. High-Speed Unique Matching Logic
     if df_district.empty or target_df.empty:
         return target_df, [], "District or Target data is empty after normalization."
 
+    # Identify unique target addresses to minimize matrix size and computation
+    unique_target_addrs = [addr for addr in target_df['소재지전체주소_norm'].unique() if pd.notna(addr) and addr.strip()]
+    
+    # [OPTIMIZATION] Build vectorizer and matrix
     vectorizer = TfidfVectorizer(analyzer='char', ngram_range=(2, 3)).fit(df_district['full_address_norm'])
     district_matrix = vectorizer.transform(df_district['full_address_norm'])
     
-    # Prepare Query (Target)
-    target_addrs = target_df['소재지전체주소_norm'].tolist()
-    target_matrix = vectorizer.transform(target_addrs)
+    # Transform only unique targets
+    unique_target_matrix = vectorizer.transform(unique_target_addrs)
     
-    cosine_sim = cosine_similarity(target_matrix, district_matrix)
+    # Calculate similarity matrix (Unique Targets x Districts) - Much smaller and faster
+    with st.spinner(f"⚡ 고속 주소 매칭 중... (고유 주소 {len(unique_target_addrs):,}건)"):
+        cosine_sim = cosine_similarity(unique_target_matrix, district_matrix)
     
-    results = []
-    for i in range(len(target_df)):
+    # Build a lookup map from unique address to its best match result
+    match_map = {}
+    for i, addr in enumerate(unique_target_addrs):
         best_match_idx = cosine_sim[i].argmax()
         best_score = cosine_sim[i][best_match_idx]
         
         if best_score >= 0.7:
-             results.append({
+             match_map[addr] = {
                  '관리지사': df_district.iloc[best_match_idx]['관리지사'],
-                 'SP담당': df_district.iloc[best_match_idx]['SP담당']
-             })
+                 'SP담당': df_district.iloc[best_match_idx]['SP담당'],
+                 '영업구역 수정': df_district.iloc[best_match_idx].get('영업구역 수정', '')
+             }
         else:
-             results.append({'관리지사': '미지정', 'SP담당': '미지정'})
+             match_map[addr] = {'관리지사': '미지정', 'SP담당': '미지정', '영업구역 수정': ''}
              
-    results_df = pd.DataFrame(results, index=target_df.index)
-    target_df = pd.concat([target_df, results_df], axis=1)
+    # Map results back to the entire target_df using vectorized mapping
+    target_df['관리지사'] = target_df['소재지전체주소_norm'].map(lambda x: match_map.get(x, {}).get('관리지사', '미지정'))
+    target_df['SP담당'] = target_df['소재지전체주소_norm'].map(lambda x: match_map.get(x, {}).get('SP담당', '미지정'))
+    target_df['영업구역 수정'] = target_df['소재지전체주소_norm'].map(lambda x: match_map.get(x, {}).get('영업구역 수정', ''))
     
     # Manager stats
     mgr_info = []
-    for branch in target_df['관리지사'].unique():
+    for branch in sorted(target_df['관리지사'].unique()):
         if branch == '미지정': continue
         branch_df = target_df[target_df['관리지사'] == branch]
-        for mgr in branch_df['SP담당'].unique():
+        for mgr in sorted(branch_df['SP담당'].unique()):
             if mgr == '미지정': continue
             mgr_info.append({
                 '관리지사': branch,
