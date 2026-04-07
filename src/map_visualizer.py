@@ -189,7 +189,21 @@ def render_kakao_map(map_df, kakao_key, use_heatmap=False, user_context={}):
             #map-detail { display: none; } /* Hide detail map on mobile to save space/perf */
             #info-panel { height: 100% !important; }
             
-            .navi-btn { padding: 15px 0; font-size: 16px; } /* Larger touch target */
+            .navi-btn { display:block; width:100%; padding:12px 0; background-color:#FEE500; color:#3C1E1E; text-decoration:none; border-radius:6px; font-weight:bold; font-size:14px; text-align:center; margin-top:20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            .navi-btn:hover { background-color:#FDD835; }
+            
+            .marker_label {
+                background: rgba(255,255,255,0.9);
+                border: 1px solid #999;
+                padding: 3px 6px;
+                border-radius: 4px;
+                font-size: 11px;
+                font-weight: 700;
+                text-align: center;
+                box-shadow: 0 1px 3.px rgba(0,0,0,0.2);
+                color: #333;
+                line-height: 1.3;
+            }
         }
     '''
 
@@ -392,7 +406,15 @@ def render_kakao_map(map_df, kakao_key, use_heatmap=False, user_context={}):
                 if (dominantStatusStr) {{
                      actBadge = '<span style="color:#D32F2F; font-weight:900; margin-right:4px;">[' + dominantStatusStr + ']</span>';
                 }}
-                var content = '<div class ="marker_label" style="display:block;">' + actBadge + item.title + '</div>';
+                
+                // [NEW] Format Modification Date (MM/DD) for Label
+                var modDateLabel = '';
+                if (item.modified_date && item.modified_date.length >= 10) {{
+                    var mmdd = item.modified_date.substring(5, 10).replace('-', '/');
+                    modDateLabel = '<div style="font-size:10px; color:#666; font-weight:normal; margin-top:1px;">' + mmdd + '</div>';
+                }}
+                
+                var content = '<div class ="marker_label" style="display:block;">' + actBadge + item.title + modDateLabel + '</div>';
                 
                 var customOverlay = new kakao.maps.CustomOverlay({{
                     position: markerPos,
