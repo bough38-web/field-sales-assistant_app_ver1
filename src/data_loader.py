@@ -280,8 +280,8 @@ def load_and_process_data(zip_file_path: str, district_file_path_or_obj: Any, sa
                         # [OPTIMIZATION] Load only relevant columns to save memory and time
                         available_cols = pd.read_csv(file, encoding=enc, nrows=0).columns
                         # [FIX] Added '좌표' and 'epsg' to 'needed' to avoid dropping coordinate columns during filtered load
-                        # [FIX] Added '업태구분명', '소재지전화' to avoid KeyError during sorting and display
-                        needed = ['사업장명', '소재지전체주소', '도로명전체주소', '업태구분명', '소재지전화', '인허가일자', '영업상태명', '폐업일자', '좌표', 'epsg', 'X', 'Y', '소재지면적', '총면적']
+                        # [FIX] Added '최종수정시점', '업태구분명', '소재지전화' to avoid KeyError and enable update trend visualization
+                        needed = ['사업장명', '소재지전체주소', '도로명전체주소', '업태구분명', '소재지전화', '인허가일자', '영업상태명', '폐업일자', '최종수정시점', '좌표', 'epsg', 'X', 'Y', '소재지면적', '총면적']
                         load_cols = [c for c in available_cols if any(n.lower() in c.lower() for n in needed)]
                         
                         df = pd.read_csv(file, encoding=enc, on_bad_lines='skip', dtype=str, low_memory=False, usecols=load_cols if load_cols else None)
