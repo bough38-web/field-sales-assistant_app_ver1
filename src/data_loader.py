@@ -243,8 +243,9 @@ def load_and_process_data(zip_file_path: str, district_file_path_or_obj: Any, sa
                     if any('주소' in str(c) for c in df_check.columns):
                         # [OPTIMIZATION] Load only relevant columns to save memory and time
                         available_cols = pd.read_csv(file, encoding=enc, nrows=0).columns
-                        needed = ['사업장명', '소재지전체주소', '도로명전체주소', '인허가일자', '영업상태명', '폐업일자', '좌표정보(X)', '좌표정보(Y)', '소재지면적', '총면적']
-                        load_cols = [c for c in available_cols if any(n in c for n in needed)]
+                        # [FIX] Added '좌표' and 'epsg' to 'needed' to avoid dropping coordinate columns during filtered load
+                        needed = ['사업장명', '소재지전체주소', '도로명전체주소', '인허가일자', '영업상태명', '폐업일자', '좌표', 'epsg', 'X', 'Y', '소재지면적', '총면적']
+                        load_cols = [c for c in available_cols if any(n.lower() in c.lower() for n in needed)]
                         
                         df = pd.read_csv(file, encoding=enc, on_bad_lines='skip', dtype=str, low_memory=False, usecols=load_cols if load_cols else None)
                         break
@@ -310,10 +311,9 @@ def load_and_process_data(zip_file_path: str, district_file_path_or_obj: Any, sa
             if not df_filtered.empty:
                 # [FIX] Per-file Coordinate Normalization
                 all_f_cols = df_filtered.columns
-                x_c = next((c for c in all_f_cols if '좌표' in c and ('x' in c.lower() or 'X' in c)), None)
-                if not x_c: x_c = next((c for c in all_f_cols if 'epsg' in c.lower() and 'x' in c.lower()), None)
-                y_c = next((c for c in all_f_cols if '좌표' in c and ('y' in c.lower() or 'Y' in c)), None)
-                if not y_c: y_c = next((c for c in all_f_cols if 'epsg' in c.lower() and 'y' in c.lower()), None)
+                # More robust search for X/Y coordinates including epsg variants
+                x_c = next((c for c in all_f_cols if ('좌표' in c or 'epsg' in c.lower()) and ('x' in c.lower() or 'X' in c)), None)
+                y_c = next((c for c in all_f_cols if ('좌표' in c or 'epsg' in c.lower()) and ('y' in c.lower() or 'Y' in c)), None)
                 
                 rename_f = {}
                 if x_c: rename_f[x_c] = '좌표정보(X)'
