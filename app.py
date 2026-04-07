@@ -766,10 +766,17 @@ with st.sidebar:
         )
         
         if dist_mode == "구글 시트 실시간 연동 (자동)":
+            # [NEW] Load from secrets if available, fallback to provided default
+            gs_secrets = st.secrets.get("connections", {}).get("gsheets", {})
+            DEFAULT_DISTRICT_GSHEET_URL = gs_secrets.get("address_master_sheet", "https://docs.google.com/spreadsheets/d/18u0yEyw4XTKcZ2ITMgQWlebMKOQotkxZ/edit")
+            
             # Google Sheets export URL for immediate reflection
-            DEFAULT_DISTRICT_GSHEET_URL = "https://docs.google.com/spreadsheets/d/18u0yEyw4XTKcZ2ITMgQWlebMKOQotkxZ/export?format=xlsx"
-            uploaded_dist = DEFAULT_DISTRICT_GSHEET_URL
-            st.success("✅ **구글 시트**와 실시간 연동되었습니다. (상단 '담당자 관리' 바로가기 활용)")
+            if "/edit" in DEFAULT_DISTRICT_GSHEET_URL:
+                uploaded_dist = DEFAULT_DISTRICT_GSHEET_URL.replace("/edit", "/export?format=xlsx")
+            else:
+                uploaded_dist = DEFAULT_DISTRICT_GSHEET_URL
+                
+            st.success("✅ **주소현행화 시트**와 실시간 연동되었습니다.")
             
         else:
             if local_excels:

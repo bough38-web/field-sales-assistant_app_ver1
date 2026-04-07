@@ -29,19 +29,6 @@ def _process_and_merge_district_data(target_df: pd.DataFrame, district_file_path
     """
     Common logic to process district file, match addresses, and merge with target_df.
     """
-    # 1. Load District File
-    try:
-        if isinstance(district_file_path_or_obj, str) and district_file_path_or_obj.startswith("http"):
-            # Use requests to download for potentially better error handling with GSheets
-            import requests
-            import io
-            response = requests.get(district_file_path_or_obj, timeout=15)
-            response.raise_for_status()
-            df_district = pd.read_excel(io.BytesIO(response.content))
-        else:
-            df_district = pd.read_excel(district_file_path_or_obj)
-    except Exception as e:
-        return target_df, [], f"Error reading District file: {e}"
 
     # 2. Normalize District Data with Robust Column Mapping
     # Standardize column names to NFC for consistent indexing across OS (Mac/Linux)
@@ -429,11 +416,27 @@ def load_and_process_data(zip_file_path: str, district_file_path_or_obj: Any, sa
     return final_df, mgr_info, err, stats
 
 
+def _get_api_url_from_config():
+    """Load API base URL from the designated GSheet config or fallback to default."""
+    default_url = "http://www.localdata.go.kr/platform/rest/TO0/openDataApi"
+    try:
+        if "connections" in st.secrets and "gsheets" in st.secrets.connections:
+            config_url = st.secrets.connections.gsheets.get("api_config_sheet", "")
+            if config_url:
+                # [OPTIONAL] Deep fetch logic here if the user wants to manage multiple URLs in a list.
+                # For now, we assume the user might provide a single URL or we just use the default if inaccessible.
+                # If the provided config_url is itself the target API, we use it.
+                # If it's a spreadsheet, we could parse it, but for MVP we'll just check if it's a direct URL first.
+                if "localdata.go.kr" in config_url: return config_url
+        return default_url
+    except:
+        return default_url
+
 def fetch_openapi_data(auth_key: str, local_code: str, start_date: str, end_date: str) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
     Fetches data from localdata.go.kr API.
     """
-    base_url = "http://www.localdata.go.kr/platform/rest/TO0/openDataApi"
+    base_url = _get_api_url_from_config()
     params = {
         "authKey": auth_key,
         "localCode": local_code,

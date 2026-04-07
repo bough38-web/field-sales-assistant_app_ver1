@@ -439,11 +439,6 @@ def sync_to_gsheet(filename, data, **kwargs):
                 if not (is_background or any(x in filename_str for x in ["usage_logs", "access_logs", "view_logs"])):
                     st.error(f"❌ 구글 시트 동기화 실패 ({filename}): {e}")
 
-def check_gsheet_connection():
-    """Verify if GSheet connection is correctly configured and accessible"""
-    if not HAS_GSHEETS:
-        return False, "streamlit-gsheets 라이브러리가 설치되지 않았습니다."
-        
     try:
         if "connections" not in st.secrets or "gsheets" not in st.secrets.connections:
             # [NEW] Detailed Missing Info for Local Users
@@ -454,59 +449,56 @@ def check_gsheet_connection():
             return False, f"설정 누락: {', '.join(missing_items)}이 없습니다. .streamlit/secrets.toml 파일을 확인해 주세요."
             
         gs_secrets = st.secrets.connections.gsheets
-        spreadsheet_url = gs_secrets.get("spreadsheet", "")
-        if not spreadsheet_url:
-            return False, "설정 오류: 'spreadsheet' (구글 시트 URL)이 입력되지 않았습니다."
-
-        conn = st.connection("gsheets", type=GSheetsConnection)
+        
+        # [NEW] Define the three spreadsheets to check
+        sheets_to_check = {
+            "주소현행화 (Master)": gs_secrets.get("address_master_sheet", ""),
+            "활동이력 (Logs)": gs_secrets.get("spreadsheet", ""),
+            "API설정 (Endpoints)": gs_secrets.get("api_config_sheet", "")
+        }
         
         # [DEBUG] Check authentication mode
-        is_service_account = False
         pk = gs_secrets.get("private_key", "")
-        if gs_secrets.get("type") == "service_account" and pk and pk != "":
-            is_service_account = True
+        is_service_account = gs_secrets.get("type") == "service_account" and pk and pk != ""
         
-        # [REFINED] Internal Diagnostic Loop
-        discovered_ws = []
-        try:
-            if hasattr(conn, "_conn") and hasattr(conn._conn, "spreadsheet"):
-                discovered_ws = [ws.title for ws in conn._conn.spreadsheet.worksheets()]
-                print(f"[GSheet Debug] Discovered Tabs: {discovered_ws}")
-        except Exception as e:
-            print(f"[GSheet Debug] Failed to list worksheets: {e}")
+        results = []
+        gc = None
+        if is_service_account:
+            try:
+                gc = get_gspread_client()
+            except Exception as auth_e:
+                return False, f"인증 오류: 서비스 계정 인증에 실패했습니다.\n\n`{str(auth_e)}`"
 
-        try:
-            # Attempt to read the specific worksheet
-            df = conn.read(worksheet="activity_status", ttl="0s", nrows=1)
-            mode_text = "서비스 계정 - Full Access" if is_service_account else "공개 URL - Read Only"
-            
-            # [NEW] Masked Spreadsheet ID for verification
-            ss_id = "N/A"
-            if spreadsheet_url and "/d/" in spreadsheet_url:
-                ss_id = spreadsheet_url.split("/d/")[1].split("/")[0]
-            masked_id = ss_id[:5] + "..." + ss_id[-5:] if len(ss_id) > 10 else ss_id
-            
-            return True, f"연결 성공! ({mode_text}, ID: {masked_id}, 확인된 탭: {', '.join(discovered_ws) if discovered_ws else '알수없음'})"
-        except Exception as read_e:
-            error_msg = str(read_e)
-            full_error = repr(read_e)
-            mode_text = "서비스 계정 인증" if is_service_account else "공개 URL 방식"
-            
-            # If we found worksheets but failed to read the specific one
-            if discovered_ws:
-                if "activity_status" not in discovered_ws:
-                    return False, f"연결 실패 (탭 누락): 'activity_status' 탭을 찾을 수 없습니다.\n\n현재 모드: `{mode_text}`\n\n탭 목록: `{discovered_ws}`"
+        # Check each sheet
+        all_ok = True
+        for name, url in sheets_to_check.items():
+            if not url:
+                results.append(f"❓ **{name}**: URL 미설정")
+                all_ok = False
+                continue
+                
+            try:
+                ss_id = url.split("/d/")[1].split("/")[0] if "/d/" in url else "N/A"
+                masked_id = ss_id[:5] + "..." + ss_id[-5:] if len(ss_id) > 10 else ss_id
+                
+                if gc:
+                    ss = gc.open_by_url(url)
+                    tabs = [ws.title for ws in ss.worksheets()]
+                    results.append(f"✅ **{name}**: `{masked_id}` ({len(tabs)}개 탭 확인됨)")
                 else:
-                    return False, f"연결 실패 (구조 오류): 'activity_status' 탭이 존재하지만 읽을 수 없습니다.\n\n현재 모드: `{mode_text}`\n\n**상세 오류**: `{full_error}`"
-            
-            # General fallback
-            if "400" in error_msg:
-                return False, f"연결 실패 (HTTP 400): `{mode_text}`으로 시트 접근 실패.\n\n**상세 오류**: `{full_error}`\n\n**조치**: {'Secrets 설정을 다시 확인하세요.' if is_service_account else '서비스 계정 정보를 Secrets에 등록하세요.'}"
-            
-            if "Permission" in full_error:
-                return False, f"연결 실패 (권한 오류): `{mode_text}` 인증은 성공했으나, 시트에 접근할 권한이 없습니다.\n\n**상세 오류**: `{full_error}`\n\n**해결법**:\n1. 구글 시트 [공유] 단추를 누르고 `{gs_secrets.get('client_email')}`를 **편집자**로 추가했는지 확인하세요.\n2. [Google Cloud Console](https://console.cloud.google.com/apis/library/sheets.googleapis.com)에서 **Google Sheets API**를 '사용'으로 설정했는지 확인하세요."
+                    results.append(f"⚠️ **{name}**: `{masked_id}` (공개 URL 모드 - 상세 확인 불가)")
+            except Exception as e:
+                all_ok = False
+                error_str = str(e)
+                if "Permission" in error_str or "403" in error_str:
+                    results.append(f"❌ **{name}**: 권한 없음 (서비스 계정 {gs_secrets.get('client_email')}를 공유에 추가하세요)")
+                else:
+                    results.append(f"❌ **{name}**: 연결 실패 ({error_str[:30]}...)")
 
-            return False, f"연결 실패: {error_msg}\n\n`{full_error}`"
+        mode_text = "서비스 계정" if is_service_account else "공개 URL"
+        final_msg = f"인증 모드: **{mode_text}**\n\n" + "\n".join(results)
+        
+        return all_ok, final_msg
             
     except Exception as e:
         return False, f"설정 오류: {str(e)}\n\n(참고: 서비스 계정 이메일이 시트에 '편집자'로 공유되었는지 확인하세요.)"
