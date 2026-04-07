@@ -16,18 +16,14 @@ def generate_map_html(map_df, kakao_key, use_heatmap, center_lat, center_lon):
     def clean_series(series):
         return series.astype(str).str.replace('"', '&quot;', regex=False).str.replace("'", "&#39;", regex=False).str.replace('\n', ' ', regex=False).str.replace('\\', '\\\\', regex=False).replace({'nan': '', 'None': ''})
 
-    # [NEW] Modified Date Formatting for Marker Label (MM-DD)
+    # [NEW] Set title and modified_date
+    map_df['title'] = clean_series(map_df['사업장명'])
     if '최종수정시점' in map_df.columns:
         # 1. Convert to datetime if not already (ensure timezone-naive)
         mod_dt = pd.to_datetime(map_df['최종수정시점'], errors='coerce').dt.tz_localize(None)
-        # 2. Extract MM-DD format
-        date_suffix = mod_dt.dt.strftime('(%m-%d)').fillna('')
-        # 3. Append to Title
-        map_df['title'] = clean_series(map_df['사업장명']) + date_suffix
-        # 4. Standard modified_date for details panel
+        # 2. Standard modified_date for details panel / JS use
         map_df['modified_date'] = mod_dt.dt.strftime('%Y-%m-%d').fillna('')
     else:
-        map_df['title'] = clean_series(map_df['사업장명'])
         map_df['modified_date'] = ''
     
     # [FEATURE] Business Type
@@ -401,14 +397,17 @@ def render_kakao_map(map_df, kakao_key, use_heatmap=False, user_context={}):
                      actBadge = '<span style="color:#D32F2F; font-weight:900; margin-right:4px;">[' + dominantStatusStr + ']</span>';
                 }}
                 
-                // [NEW] Format Modification Date (MM/DD) for Label
+                // [NEW] Format Modification Date (MM-DD) for Label (below name)
                 var modDateLabel = '';
                 if (item.modified_date && item.modified_date.length >= 10) {{
-                    var mmdd = item.modified_date.substring(5, 10).replace('-', '/');
-                    modDateLabel = '<div style="font-size:10px; color:#666; font-weight:normal; margin-top:1px;">' + mmdd + '</div>';
+                    var mmdd = item.modified_date.substring(5, 10);
+                    modDateLabel = '<div style="font-size:10.5px; color:#D32F2F; font-weight:600; margin-top:2px;">(' + mmdd + ')</div>';
                 }}
                 
-                var content = '<div class ="marker_label" style="display:block;">' + actBadge + item.title + modDateLabel + '</div>';
+                var content = '<div class="marker_label" style="display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,0.95); padding:4px 8px; border-radius:6px; border:1px solid #ccc; box-shadow:0 1px 3px rgba(0,0,0,0.2); white-space:nowrap;">' + 
+                              '<div style="font-weight:bold; color:#333;">' + actBadge + item.title + '</div>' + 
+                              modDateLabel + 
+                              '</div>';
                 
                 var customOverlay = new kakao.maps.CustomOverlay({{
                     position: markerPos,
