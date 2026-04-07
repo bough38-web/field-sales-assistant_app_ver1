@@ -2502,7 +2502,11 @@ if raw_df is not None:
         
         # [NEW] Initialize Date Filter from Session State (for filtering logic before UI render)
         if 'global_date_range' not in st.session_state:
-            st.session_state.global_date_range = ()
+            # [FIX] Default to the last 50 days from GLOBAL_MAX_DATE to ensure data visibility by default
+            # This prevents the 'No data to display' issue on initial load and improves performance/responsiveness.
+            default_start = (GLOBAL_MAX_DATE - timedelta(days=50)).date()
+            default_end = GLOBAL_MAX_DATE.date()
+            st.session_state.global_date_range = (default_start, default_end)
         
         # [NEW] Ensure 'sb_mod_period' (Sidebar) and 'tab_mod_period' (Tab) cleanly sync to 'global_date_range'
         def _sync_date_state(key):
