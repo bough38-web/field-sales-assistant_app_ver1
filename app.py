@@ -1214,17 +1214,29 @@ if uploaded_dist:
                  # [FEATURE] Store data stats in session state for later "Help" (?) query
                  st.session_state['data_load_stats'] = stats
              
-             # [NEW v13] Admin Sync Notification - Enhanced with detailed status
+             # [NEW v13] Admin Sync Notification - Enhanced with detailed status & errors
              if st.session_state.get('show_admin_sync_toast') and st.session_state.get('user_role') == 'admin':
                  results = st.session_state.get('last_sync_results', {})
-                 msg = "🔑 시스템 데이터 동기화 완료\n"
-                 msg += f"• 주소 마스터: {'✅' if results.get('Address Master') else '⚠️'}\n"
-                 msg += f"• 활동/로그 데이터: {'✅' if results.get('Activity History') else '⚠️'}\n"
-                 msg += f"• API 설정 정보: {'✅' if results.get('API Config') else '⚠️'}"
+                 errors = results.get('Errors', {})
+                 
+                 msg = "🔑 시스템 데이터 동기화 결과\n"
+                 
+                 def fmt_status(key, name):
+                     status = '✅' if results.get(key) else '⚠️'
+                     err = errors.get(name, "")
+                     if err:
+                         # Shorten common errors for toast readability
+                         short_err = f" ({err[:25]}...)" if len(err) > 25 else f" ({err})"
+                         return f"• {name}: {status}{short_err}\n"
+                     return f"• {name}: {status}\n"
+
+                 msg += fmt_status('Address Master', '주소 마스터')
+                 msg += fmt_status('Activity History', '활동/로그 데이터')
+                 msg += fmt_status('API Config', 'API 설정 정보')
                  
                  # [FIX] Extra warning if credentials are missing
                  if not results.get('Auth', True):
-                     msg += "\n\n💡 팁: secrets.toml에 구글 서비스 계정 정보(인증키)가 설정되어 있는지 확인해 주세요."
+                     msg += "\n💡 팁: secrets.toml에 구글 서비스 계정 정보(인증키)가 설정되어 있지 않습니다."
                  
                  st.toast(msg, icon="⚙️")
                  st.session_state['show_admin_sync_toast'] = False

@@ -516,17 +516,18 @@ def pull_from_gsheet():
         "Logs": False
     }
     
-    # Initialize sync status tracking
+    # Initialize sync status tracking with error messages
     sync_results = {
         "Address Master": False,
         "Activity History": False,
         "API Config": False,
         "Logs": False,
-        "Auth": True
+        "Auth": True,
+        "Errors": {}
     }
     
     try:
-        # Check if basic settings exist
+        # Check if basic settings exist or if they are just empty placeholders
         if "connections" not in st.secrets or "gsheets" not in st.secrets.connections:
              st.session_state['last_sync_results'] = sync_results
              return
@@ -538,39 +539,37 @@ def pull_from_gsheet():
         try:
             m_url = st.secrets.connections.gsheets.get("address_master_sheet", "")
             if m_url:
-                # Try positional argument for better compatibility
                 head_df = conn.read(m_url, nrows=1, ttl="0s")
-                if head_df is not None: 
-                    sync_results["Address Master"] = True
+                if head_df is not None: sync_results["Address Master"] = True
         except Exception as e:
-            print(f"DEBUG: Sync Verification Error (Address Master): {e}")
+            sync_results["Errors"]["Address Master"] = str(e)
+            print(f"DEBUG: Master Sync Error: {e}")
         
-        # [B] Activity History (Main Log Sheet)
+        # [B] Activity History
         try:
             h_url = st.secrets.connections.gsheets.get("spreadsheet", "")
             if h_url:
-                # Main sheet has "로그인 이력" worksheet
                 head_df = conn.read(h_url, worksheet="로그인 이력", nrows=1, ttl="0s")
-                if head_df is not None: 
-                    sync_results["Activity History"] = True
+                if head_df is not None: sync_results["Activity History"] = True
         except Exception as e:
-            print(f"DEBUG: Sync Verification Error (Activity History): {e}")
+            sync_results["Errors"]["Activity History"] = str(e)
+            print(f"DEBUG: History Sync Error: {e}")
         
         # [C] API Config
         try:
             a_url = st.secrets.connections.gsheets.get("api_config_sheet", "")
             if a_url:
                 head_df = conn.read(a_url, nrows=1, ttl="0s")
-                if head_df is not None: 
-                    sync_results["API Config"] = True
+                if head_df is not None: sync_results["API Config"] = True
         except Exception as e:
-            print(f"DEBUG: Sync Verification Error (API Config): {e}")
+            sync_results["Errors"]["API Config"] = str(e)
+            print(f"DEBUG: API Sync Error: {e}")
 
-        # [FINAL AUTH CHECK] If all 3 failed, then set Auth to False to provide hint
+        # [FINAL AUTH CHECK] Detect if secrets are empty
+        gs_sect = st.secrets.connections.gsheets
+        has_creds = gs_sect.get("private_key") and gs_sect.get("client_email")
         if not any([sync_results["Address Master"], sync_results["Activity History"], sync_results["API Config"]]):
-            gs_secrets = st.secrets.connections.gsheets
-            if not gs_secrets.get("private_key") or not gs_secrets.get("client_email"):
-                sync_results["Auth"] = False
+            if not has_creds: sync_results["Auth"] = False
 
         # 2. Pull Logs (Existing Logic)
         mapping = {
