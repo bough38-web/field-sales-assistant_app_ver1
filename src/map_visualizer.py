@@ -1286,15 +1286,19 @@ def render_folium_map(display_df, use_heatmap=False, user_context={}):
             .marker-orange {{ background-color: #F57C00; }}
             
             .marker_label {{
-                background: rgba(255,255,255,0.9);
-                border: 1px solid #999;
-                padding: 2px 6px;
-                border-radius: 4px;
+                background: rgba(255,255,255,0.95);
+                border: 1px solid #ccc;
+                padding: 4px 8px;
+                border-radius: 6px;
                 font-size: 12px;
-                font-weight: 700;
+                font-weight: bold;
                 white-space: nowrap;
                 box-shadow: 0 1px 3px rgba(0,0,0,0.2);
                 color: #333;
+                text-align: center;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
             }}
         </style>
     </head>
@@ -1506,7 +1510,16 @@ def render_folium_map(display_df, use_heatmap=False, user_context={}):
                      tooltipText = '[' + dominantStatusStr + '] ' + tooltipText;
                 }}
                 
-                marker.bindTooltip(tooltipText, {{ 
+                // [NEW] Format Modification Date (MM-DD) for Leaflet Label (below name)
+                var modDateLabel = '';
+                if (item.modified_date && item.modified_date.length >= 10) {{
+                    var mmdd = item.modified_date.substring(5, 10);
+                    modDateLabel = '<div style="font-size:10.5px; color:#D32F2F; font-weight:600; margin-top:2px;">(' + mmdd + ')</div>';
+                }}
+                
+                var finalTooltipHtml = '<div>' + tooltipText + '</div>' + modDateLabel;
+                
+                marker.bindTooltip(finalTooltipHtml, {{ 
                     permanent: true, 
                     direction: 'top', 
                     offset: [0, -18], 
