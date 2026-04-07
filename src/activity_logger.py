@@ -542,8 +542,10 @@ def pull_from_gsheet():
             try:
                 # Try to see if it's accessible as a public export CSV/XLSX
                 test_url = url.split('/edit')[0] + '/export?format=csv' if '/edit' in url else url
-                response = requests.head(test_url, timeout=3)
-                return response.status_code == 200 or response.status_code == 302
+                # [FIX] Enhanced for more robust detection (allows redirects)
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                response = requests.head(test_url, timeout=10, allow_redirects=True, headers=headers)
+                return response.status_code == 200
             except:
                 return False
 

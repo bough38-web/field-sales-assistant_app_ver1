@@ -1353,12 +1353,11 @@ if raw_df is not None:
         if date_candidates:
             GLOBAL_MAX_DATE = max(date_candidates).normalize()
             
-    # [FIX] Capping GLOBAL_MAX_DATE to `Today - 2 days` 
-    # The public data has a strict 2-day ingestion delay. 
-    # Prevent future dataset typos (e.g., 2026-03-03) from extending the UI end date.
-    max_allowed_date = utils.get_now_kst().normalize().replace(tzinfo=None) - pd.Timedelta(days=2)
-    if GLOBAL_MAX_DATE > max_allowed_date:
-        GLOBAL_MAX_DATE = max_allowed_date
+    # [FIX] Adjusted GLOBAL_MAX_DATE logic to allow latest daily records (April) to be visible.
+    # Capping removed to support specific date range uploads (e.g. 4.1~4.5)
+    # max_allowed_date = utils.get_now_kst().normalize().replace(tzinfo=None) - pd.Timedelta(days=2)
+    # if GLOBAL_MAX_DATE > max_allowed_date:
+    #     GLOBAL_MAX_DATE = max_allowed_date
 
     if raw_df is not None and not raw_df.empty:
         current_branches_raw = [unicodedata.normalize('NFC', str(b)) for b in raw_df['관리지사'].unique() if pd.notna(b)]
