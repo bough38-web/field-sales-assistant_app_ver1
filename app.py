@@ -1308,10 +1308,13 @@ if raw_df is not None:
     else:
         raw_df['관리지사'] = '미지정'
 
-    # [FIX] Global NFC Normalization 
+    # [FIX] Global NFC Normalization (Robust towards NaN/Mixed Types)
     for col in ['관리지사', 'SP담당', '사업장명', '소재지전체주소', '영업상태명', '업태구분명']:
         if col in raw_df.columns:
-            raw_df[col] = raw_df[col].astype(str).apply(lambda x: unicodedata.normalize('NFC', x).strip() if x else x)
+            # fillna('') is crucial to prevent float (NaN) from entering unicodedata.normalize
+            raw_df[col] = raw_df[col].fillna('').astype(str).apply(
+                lambda x: unicodedata.normalize('NFC', x).strip() if x else x
+            )
             
     # [FIX] HOT-RELOAD STATUS
     # Even if cached, we re-merge the latest JSON status to ensure freshness
