@@ -1236,7 +1236,8 @@ if uploaded_dist:
     if data_source == "파일 업로드 (File)" and uploaded_zip:
         with st.spinner("🚀 파일 분석 및 매칭중..."):
              # [FIX] Unpack 4 values (df, mgr_info, error, stats)
-             raw_df, mgr_info_list, error, stats = data_loader.load_and_process_data(uploaded_zip, uploaded_dist)
+             # [FORCE REFRESH] Added salt to invalidate old cache and force reload of April 5th data
+             raw_df, mgr_info_list, error, stats = data_loader.load_and_process_data(uploaded_zip, uploaded_dist, salt="v20260407_1456")
              
              if stats:
                  # [FEATURE] Store data stats in session state for later "Help" (?) query
