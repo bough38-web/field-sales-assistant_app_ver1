@@ -4353,6 +4353,9 @@ if raw_df is not None:
             
             # Open (In-sync / Newly appeared)
             if '최종수정시점' in base_df.columns:
+                 # [FIX] Ensure datetime type before filtering to prevent visualization drops
+                 base_df['최종수정시점'] = pd.to_datetime(base_df['최종수정시점'], errors='coerce')
+                 
                  # [FIX] Use Update Date (최종수정시점) instead of License Date (인허가일자) 
                  # to visualize the data sync volume (e.g. 10k records in April)
                  open_15d = base_df[
