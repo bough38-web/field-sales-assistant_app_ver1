@@ -1353,11 +1353,17 @@ if raw_df is not None:
         if date_candidates:
             GLOBAL_MAX_DATE = max(date_candidates).normalize()
             
-    # [FIX] Adjusted GLOBAL_MAX_DATE logic to allow latest daily records (April) to be visible.
-    # Capping removed to support specific date range uploads (e.g. 4.1~4.5)
-    # max_allowed_date = utils.get_now_kst().normalize().replace(tzinfo=None) - pd.Timedelta(days=2)
-    # if GLOBAL_MAX_DATE > max_allowed_date:
-    #     GLOBAL_MAX_DATE = max_allowed_date
+    # [FIX] Hardcap Dashboard Data and Charts to April 5th, 2026 as per user request
+    request_cap = pd.Timestamp("2026-04-05")
+    if GLOBAL_MAX_DATE > request_cap:
+        GLOBAL_MAX_DATE = request_cap
+    
+    # [FIX] Remove future/noise data (e.g. May) from statistics
+    if raw_df is not None and not raw_df.empty:
+        date_cols = [c for c in ['인허가일자', '폐업일자', '최종수정시점'] if c in raw_df.columns]
+        for col in date_cols:
+            # Keep only records on or before 4/5
+            raw_df = raw_df[~(raw_df[col] > request_cap)]
 
     if raw_df is not None and not raw_df.empty:
         current_branches_raw = [unicodedata.normalize('NFC', str(b)) for b in raw_df['관리지사'].unique() if pd.notna(b)]
