@@ -333,9 +333,36 @@ if "interest_action" in st.query_params:
             i_title, i_addr, i_lat, i_lon
         )
         
+        # 1. Address Master Status
+        m_status = "✅" if res.get("Address Master") else "⚠️"
+        if not res.get("Address Master") and res.get("Errors", {}).get("Address Master"):
+            m_status += f" ({res['Errors']['Address Master'][:30]}...)"
+        
+        # 2. Activity History Status
+        h_status = "✅" if res.get("Activity History") else "⚠️"
+        if not res.get("Activity History") and res.get("Errors", {}).get("Activity History"):
+            h_status += f" ({res['Errors']['Activity History'][:30]}...)"
+        
+        # 3. API Config Status
+        a_status = "✅" if res.get("API Config") else "⚠️"
+        if not res.get("API Config") and res.get("Errors", {}).get("API Config"):
+            a_status += f" ({res['Errors']['API Config'][:30]}...)"
+        
+        # [NEW] Determine Connection Mode Label
+        mode_label = " (공개 링크 방식으로 연동됨)" if res.get("Public_Mode") else " (정식 인증 완료)"
+        
+        sync_msg = f"🔑 **시스템 데이터 동기화 완료**{mode_label}\n\n• 주소 마스터: {m_status}\n• 활동/로그 데이터: {h_status}\n• API 설정 정보: {a_status}"
+        
+        if not all([res.get("Address Master"), res.get("Activity History"), res.get("API Config")]):
+            st.toast(sync_msg, icon="⚠️")
+            
+            # Show hint only if it's not even a public connection
+            if not res.get("Public_Mode"):
+                st.info("💡 **팁**: `secrets.toml`에 구글 서비스 계정 정보(인증키)가 등록되지 않았거나, 시트 공유 설정이 '링크가 있는 모든 사용자'가 아닙니다.")
+        else:
+            st.toast(sync_msg, icon="✅")
+        
         # [NEW] Also log to Visit History as "Interest Marked"
-        # Use a specific status or just a log? User said "appear in visit history".
-        # We'll create a system-generated visit report.
         u_name = st.session_state.get('user_manager_name') or st.session_state.get('user_branch') or "Unknown"
         if i_title and i_addr:
             # Generate key

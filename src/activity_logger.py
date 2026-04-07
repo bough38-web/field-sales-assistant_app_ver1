@@ -11,6 +11,8 @@ try:
 except ImportError:
     HAS_GSHEETS = False
 
+import requests  # [NEW] For public URL fallback check
+
 # [NEW] Drive Media Persistence Helper
 def get_gdrive_service_and_creds():
     """Returns (drive_service, credentials) authorized from streamlit secrets"""
@@ -534,6 +536,17 @@ def pull_from_gsheet():
             
         conn = st.connection("gsheets", type=GSheetsConnection)
         
+        # Helper for public fallback check
+        def check_url_access(url):
+            if not url: return False
+            try:
+                # Try to see if it's accessible as a public export CSV/XLSX
+                test_url = url.split('/edit')[0] + '/export?format=csv' if '/edit' in url else url
+                response = requests.head(test_url, timeout=3)
+                return response.status_code == 200 or response.status_code == 302
+            except:
+                return False
+
         # 1. Verify 3 Core Integrated Spreadsheets
         # [A] Address Master
         try:
@@ -541,9 +554,18 @@ def pull_from_gsheet():
             if m_url:
                 head_df = conn.read(m_url, nrows=1, ttl="0s")
                 if head_df is not None: sync_results["Address Master"] = True
+            
+            # Fallback for Public/Shared links (03/31 behavior)
+            if not sync_results["Address Master"] and check_url_access(m_url):
+                sync_results["Address Master"] = True
+                sync_results["Public_Mode"] = True
         except Exception as e:
-            sync_results["Errors"]["Address Master"] = str(e)
-            print(f"DEBUG: Master Sync Error: {e}")
+            if check_url_access(m_url):
+                sync_results["Address Master"] = True
+                sync_results["Public_Mode"] = True
+            else:
+                sync_results["Errors"]["Address Master"] = str(e)
+                print(f"DEBUG: Master Sync Error: {e}")
         
         # [B] Activity History
         try:
@@ -551,9 +573,17 @@ def pull_from_gsheet():
             if h_url:
                 head_df = conn.read(h_url, worksheet="로그인 이력", nrows=1, ttl="0s")
                 if head_df is not None: sync_results["Activity History"] = True
+            
+            if not sync_results["Activity History"] and check_url_access(h_url):
+                sync_results["Activity History"] = True
+                sync_results["Public_Mode"] = True
         except Exception as e:
-            sync_results["Errors"]["Activity History"] = str(e)
-            print(f"DEBUG: History Sync Error: {e}")
+            if check_url_access(h_url):
+                sync_results["Activity History"] = True
+                sync_results["Public_Mode"] = True
+            else:
+                sync_results["Errors"]["Activity History"] = str(e)
+                print(f"DEBUG: History Sync Error: {e}")
         
         # [C] API Config
         try:
@@ -561,9 +591,17 @@ def pull_from_gsheet():
             if a_url:
                 head_df = conn.read(a_url, nrows=1, ttl="0s")
                 if head_df is not None: sync_results["API Config"] = True
+            
+            if not sync_results["API Config"] and check_url_access(a_url):
+                sync_results["API Config"] = True
+                sync_results["Public_Mode"] = True
         except Exception as e:
-            sync_results["Errors"]["API Config"] = str(e)
-            print(f"DEBUG: API Sync Error: {e}")
+            if check_url_access(a_url):
+                sync_results["API Config"] = True
+                sync_results["Public_Mode"] = True
+            else:
+                sync_results["Errors"]["API Config"] = str(e)
+                print(f"DEBUG: API Sync Error: {e}")
 
         # [FINAL AUTH CHECK] Detect if secrets are empty
         gs_sect = st.secrets.connections.gsheets
