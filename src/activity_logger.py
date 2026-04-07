@@ -516,11 +516,26 @@ def pull_from_gsheet():
         "Logs": False
     }
     
+    # Initialize sync status tracking
+    sync_results = {
+        "Address Master": False,
+        "Activity History": False,
+        "API Config": False,
+        "Logs": False,
+        "Auth": True
+    }
+    
     try:
         if "connections" not in st.secrets or "gsheets" not in st.secrets.connections:
+            sync_results["Auth"] = False
             st.session_state['last_sync_results'] = sync_results
             return
             
+        gs_secrets = st.secrets.connections.gsheets
+        if not gs_secrets.get("private_key") or not gs_secrets.get("client_email"):
+            sync_results["Auth"] = False
+            print("DEBUG: GSheet Credentials are missing in secrets.toml")
+
         conn = st.connection("gsheets", type=GSheetsConnection)
         
         # 1. Verify 3 Core Integrated Spreadsheets
@@ -528,26 +543,38 @@ def pull_from_gsheet():
         try:
             m_url = st.secrets.connections.gsheets.get("address_master_sheet", "")
             if m_url:
-                # Just a HEAD check or small read to verify access
+                # Standard read call without explicit keyword if possible, or verify URL
                 head_df = conn.read(spreadsheet=m_url, nrows=1, ttl="0s")
-                if head_df is not None: sync_results["Address Master"] = True
-        except: pass
+                if head_df is not None: 
+                    sync_results["Address Master"] = True
+                else:
+                    print(f"DEBUG: Sync Verification Failed (Address Master) - Returned None")
+        except Exception as e:
+            print(f"DEBUG: Sync Verification Error (Address Master): {e}")
         
         # [B] Activity History (Main Log Sheet)
         try:
             h_url = st.secrets.connections.gsheets.get("spreadsheet", "")
             if h_url:
                 head_df = conn.read(spreadsheet=h_url, worksheet="로그인 이력", nrows=1, ttl="0s")
-                if head_df is not None: sync_results["Activity History"] = True
-        except: pass
+                if head_df is not None: 
+                    sync_results["Activity History"] = True
+                else:
+                    print(f"DEBUG: Sync Verification Failed (Activity History) - Returned None")
+        except Exception as e:
+            print(f"DEBUG: Sync Verification Error (Activity History): {e}")
         
         # [C] API Config
         try:
             a_url = st.secrets.connections.gsheets.get("api_config_sheet", "")
             if a_url:
                 head_df = conn.read(spreadsheet=a_url, nrows=1, ttl="0s")
-                if head_df is not None: sync_results["API Config"] = True
-        except: pass
+                if head_df is not None: 
+                    sync_results["API Config"] = True
+                else:
+                    print(f"DEBUG: Sync Verification Failed (API Config) - Returned None")
+        except Exception as e:
+            print(f"DEBUG: Sync Verification Error (API Config): {e}")
 
         # 2. Pull Logs (Existing Logic)
         mapping = {

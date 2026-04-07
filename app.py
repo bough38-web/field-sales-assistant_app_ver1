@@ -1222,6 +1222,10 @@ if uploaded_dist:
                  msg += f"• 활동/로그 데이터: {'✅' if results.get('Activity History') else '⚠️'}\n"
                  msg += f"• API 설정 정보: {'✅' if results.get('API Config') else '⚠️'}"
                  
+                 # [FIX] Extra warning if credentials are missing
+                 if not results.get('Auth', True):
+                     msg += "\n\n💡 팁: secrets.toml에 구글 서비스 계정 정보(인증키)가 설정되어 있는지 확인해 주세요."
+                 
                  st.toast(msg, icon="⚙️")
                  st.session_state['show_admin_sync_toast'] = False
              
