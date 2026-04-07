@@ -4351,20 +4351,22 @@ if raw_df is not None:
             
             trend_data = []
             
-            # Open (In-license)
-            if '인허가일자' in base_df.columns:
+            # Open (In-sync / Newly appeared)
+            if '최종수정시점' in base_df.columns:
+                 # [FIX] Use Update Date (최종수정시점) instead of License Date (인허가일자) 
+                 # to visualize the data sync volume (e.g. 10k records in April)
                  open_15d = base_df[
-                     (base_df['인허가일자'] >= trend_start_date) & 
-                     (base_df['인허가일자'] <= trend_end_date + pd.Timedelta(days=1)) 
+                     (base_df['최종수정시점'] >= trend_start_date) & 
+                     (base_df['최종수정시점'] <= trend_end_date + pd.Timedelta(days=1)) 
                  ].copy()
                  
                  open_counts = trend_base_df[['date', 'date_str']].copy()
-                 open_counts['status'] = '영업'
+                 open_counts['status'] = '신규수집/영업'
                  open_counts['count'] = 0
                  
                  if not open_15d.empty:
-                     # Calculate counts and merge
-                     daily_open = open_15d['인허가일자'].dt.normalize().value_counts().reset_index()
+                     # Calculate counts based on daily update/sync time
+                     daily_open = open_15d['최종수정시점'].dt.normalize().value_counts().reset_index()
                      daily_open.columns = ['date', 'actual_count']
                      open_counts = pd.merge(open_counts, daily_open, on='date', how='left')
                      open_counts['count'] = open_counts['actual_count'].fillna(0).astype(int)
