@@ -7,6 +7,8 @@ env/
 # data/  <-- Commented out to allow data folder
 output/
 temp_extracted_data/
+temp_extracted/
+*.log
 
 # Generated Reports and Backups
 reports/
