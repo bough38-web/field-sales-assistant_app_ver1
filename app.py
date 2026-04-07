@@ -4662,7 +4662,10 @@ if raw_df is not None:
                 grid_df[dt_col] = pd.to_datetime(grid_df[dt_col], errors='coerce').dt.strftime('%Y-%m-%d').fillna("")
 
 
-        grid_df = grid_df.sort_values(by=['관리지사', 'SP담당', '업태구분명'])
+        # [FIX] Defensive sorting to prevent KeyError if some columns are missing
+        sort_cols = [c for c in ['관리지사', 'SP담당', '업태구분명'] if c in grid_df.columns]
+        if sort_cols:
+            grid_df = grid_df.sort_values(by=sort_cols)
         
         # [LAYOUT] Data Grid & VOC
         
