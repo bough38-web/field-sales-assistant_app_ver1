@@ -14,7 +14,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # Import from local utils
-from src.utils import normalize_address, parse_coordinates_row, get_best_match, calculate_area, transformer, HAS_PYPROJ
+from src.utils import normalize_address, vectorize_normalize_address, parse_coordinates_row, get_best_match, calculate_area, transformer, HAS_PYPROJ
 
 def normalize_str(s: Any) -> Optional[str]:
     if pd.isna(s): return s
@@ -74,9 +74,9 @@ def _process_and_merge_district_data(target_df: pd.DataFrame, district_file_path
     else:
         df_district['SP담당'] = '미지정'
 
-    df_district['full_address'] = df_district['full_address'].apply(normalize_str)
-    
-    df_district['full_address_norm'] = df_district['full_address'].apply(normalize_address)
+    df_district['SP담당'] = df_district['SP담당'].fillna('미지정').str.strip()
+
+    df_district['full_address_norm'] = vectorize_normalize_address(df_district['full_address'])
     df_district = df_district.dropna(subset=['full_address_norm'])
     
     # Deduplicate District Data
@@ -87,7 +87,7 @@ def _process_and_merge_district_data(target_df: pd.DataFrame, district_file_path
     if '소재지전체주소' not in target_df.columns:
         pass
 
-    target_df['소재지전체주소_norm'] = target_df['소재지전체주소'].astype(str).apply(normalize_address)
+    target_df['소재지전체주소_norm'] = vectorize_normalize_address(target_df['소재지전체주소'])
     target_df = target_df.dropna(subset=['소재지전체주소_norm'])
 
     # 4. High-Speed Unique Matching Logic
@@ -108,25 +108,36 @@ def _process_and_merge_district_data(target_df: pd.DataFrame, district_file_path
     with st.spinner(f"⚡ 고속 주소 매칭 중... (고유 주소 {len(unique_target_addrs):,}건)"):
         cosine_sim = cosine_similarity(unique_target_matrix, district_matrix)
     
-    # Build a lookup map from unique address to its best match result
-    match_map = {}
-    for i, addr in enumerate(unique_target_addrs):
-        best_match_idx = cosine_sim[i].argmax()
-        best_score = cosine_sim[i][best_match_idx]
-        
-        if best_score >= 0.7:
-             match_map[addr] = {
-                 '관리지사': df_district.iloc[best_match_idx]['관리지사'],
-                 'SP담당': df_district.iloc[best_match_idx]['SP담당'],
-                 '영업구역 수정': df_district.iloc[best_match_idx].get('영업구역 수정', '')
-             }
-        else:
-             match_map[addr] = {'관리지사': '미지정', 'SP담당': '미지정', '영업구역 수정': ''}
+    # [OPTIMIZATION] Vectorized mapping using numpy
+    best_indices = cosine_sim.argmax(axis=1)
+    best_scores = cosine_sim.max(axis=1)
+    
+    # Pre-calculate data from df_district to avoid repeated indexing
+    dist_branches = df_district['관리지사'].values
+    dist_mgrs = df_district['SP담당'].values
+    dist_areas = df_district['영업구역 수정'].values if '영업구역 수정' in df_district.columns else np.full(len(df_district), '')
+
+    # Apply threshold mask
+    mask = best_scores >= 0.7
+    
+    # Initialize results
+    matched_branches = np.full(len(unique_target_addrs), '미지정', dtype=object)
+    matched_mgrs = np.full(len(unique_target_addrs), '미지정', dtype=object)
+    matched_areas = np.full(len(unique_target_addrs), '', dtype=object)
+    
+    # Fill matched
+    matched_branches[mask] = dist_branches[best_indices[mask]]
+    matched_mgrs[mask] = dist_mgrs[best_indices[mask]]
+    matched_areas[mask] = dist_areas[best_indices[mask]]
+    
+    # Build a lookup dict for final mapping
+    match_map = {addr: {'관리지사': b, 'SP담당': m, '영업구역 수정': a} 
+                 for addr, b, m, a in zip(unique_target_addrs, matched_branches, matched_mgrs, matched_areas)}
              
     # Map results back to the entire target_df using vectorized mapping
-    target_df['관리지사'] = target_df['소재지전체주소_norm'].map(lambda x: match_map.get(x, {}).get('관리지사', '미지정'))
-    target_df['SP담당'] = target_df['소재지전체주소_norm'].map(lambda x: match_map.get(x, {}).get('SP담당', '미지정'))
-    target_df['영업구역 수정'] = target_df['소재지전체주소_norm'].map(lambda x: match_map.get(x, {}).get('영업구역 수정', ''))
+    target_df.loc[:, '관리지사'] = target_df['소재지전체주소_norm'].map(lambda x: match_map.get(x, {}).get('관리지사', '미지정'))
+    target_df.loc[:, 'SP담당'] = target_df['소재지전체주소_norm'].map(lambda x: match_map.get(x, {}).get('SP담당', '미지정'))
+    target_df.loc[:, '영업구역 수정'] = target_df['소재지전체주소_norm'].map(lambda x: match_map.get(x, {}).get('영업구역 수정', ''))
     
     # Manager stats
     mgr_info = []
@@ -230,7 +241,12 @@ def load_and_process_data(zip_file_path: str, district_file_path_or_obj: Any, sa
                 try:
                     df_check = pd.read_csv(file, encoding=enc, on_bad_lines='skip', dtype=str, nrows=5)
                     if any('주소' in str(c) for c in df_check.columns):
-                        df = pd.read_csv(file, encoding=enc, on_bad_lines='skip', dtype=str, low_memory=False)
+                        # [OPTIMIZATION] Load only relevant columns to save memory and time
+                        available_cols = pd.read_csv(file, encoding=enc, nrows=0).columns
+                        needed = ['사업장명', '소재지전체주소', '도로명전체주소', '인허가일자', '영업상태명', '폐업일자', '좌표정보(X)', '좌표정보(Y)', '소재지면적', '총면적']
+                        load_cols = [c for c in available_cols if any(n in c for n in needed)]
+                        
+                        df = pd.read_csv(file, encoding=enc, on_bad_lines='skip', dtype=str, low_memory=False, usecols=load_cols if load_cols else None)
                         break
                     elif len(df_check.columns) >= 20: 
                          first_val = str(df_check.columns[0])

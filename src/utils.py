@@ -3,6 +3,7 @@ import re
 import unicodedata
 import os
 import json
+import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta, timezone
@@ -34,10 +35,13 @@ except ImportError:
     HAS_PYPROJ = False
     transformer = None
 
+# Pre-compiled regex for performance
+ADDR_BRACKET_RE = re.compile(r'\([^)]*\)')
+ADDR_WHITESPACE_RE = re.compile(r'\s+')
+
 def normalize_address(address):
     """
-    Normalizes a Korean address string.
-    Removes special characters, standardizes region names.
+    Normalizes a single Korean address string.
     """
     if pd.isna(address):
         return None
@@ -45,9 +49,10 @@ def normalize_address(address):
     address = str(address).strip()
     
     # Remove everything in brackets (e.g., (Apt 101), (Bldg B))
-    address = re.sub(r'\([^)]*\)', '', address)
+    address = ADDR_BRACKET_RE.sub('', address)
     
     # Standardize
+    # Use a faster single pass if possible, but keep simple for now
     address = address.replace('강원특별자치도', '강원도')
     address = address.replace('세종특별자치시', '세종시')
     address = address.replace('서울특별시', '서울시')
@@ -58,6 +63,39 @@ def normalize_address(address):
         return None
         
     return address.strip()
+
+def vectorize_normalize_address(series: pd.Series) -> pd.Series:
+    """
+    Fast, vectorized version of normalize_address for pandas Series.
+    """
+    if series is None or series.empty:
+        return series
+        
+    # Convert to string and strip
+    s = series.astype(str).str.strip()
+    
+    # Remove brackets
+    s = s.str.replace(r'\([^)]*\)', '', regex=True)
+    
+    # Standardize regions
+    replacements = {
+        '강원특별자치도': '강원도',
+        '세종특별자치시': '세종시',
+        '서울특별시': '서울시',
+        '  ': ' ',
+        '-': ''
+    }
+    for old, new in replacements.items():
+        s = s.str.replace(old, new, regex=False)
+    
+    # Final strip
+    s = s.str.strip()
+    
+    # Mask short or invalid
+    mask = (s.str.contains('*', regex=False)) | (s.str.len() < 8) | (series.isna())
+    s[mask] = None
+    
+    return s
 
 def parse_coordinates_row(row, x_col, y_col):
     """
