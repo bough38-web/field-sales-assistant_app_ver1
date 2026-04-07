@@ -2988,9 +2988,9 @@ if raw_df is not None:
                   base_df['최종수정시점'] = pd.to_datetime(base_df['최종수정시점'], errors='coerce')
              
              # [FIX] TypeError: Invalid comparison between tz-aware and tz-naive
-             # Localize filter Timestamps to Asia/Seoul (KST)
-             ts_start = pd.Timestamp(g_start).tz_localize('Asia/Seoul')
-             ts_end = (pd.Timestamp(g_end) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)).tz_localize('Asia/Seoul')
+             # We use tz-naive timestamps to match the normalized dataset format
+             ts_start = pd.Timestamp(g_start)
+             ts_end = pd.Timestamp(g_end) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
              
              base_df = base_df[
                  (base_df['최종수정시점'] >= ts_start) & 
