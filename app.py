@@ -3809,39 +3809,6 @@ if raw_df is not None:
                                 if col_p_cancel.form_submit_button("취소", use_container_width=True):
                                     st.session_state[f"photo_mode_{rep.get('id', f'fallback_{idx}')}"] = False
                                     st.rerun()
-                        
-                        # [FEATURE] Status change mode
-                        if st.session_state.get(f"status_mode_{rep.get('id', f'fallback_{idx}')}", False):
-                            with st.form(key=f"form_status_{rep.get('id', f'fallback_{idx}')}"):
-                                st.caption("🔄 활동 상태를 변경하세요")
-                                status_opts = list(activity_logger.ACTIVITY_STATUS_MAP.values())
-                                current_status = rep.get('resulting_status', '')
-                                current_idx = status_opts.index(current_status) if current_status in status_opts else 0
-                                
-                                new_status = st.selectbox("새 상태", status_opts, index=current_idx)
-                                status_note = st.text_area("변경 사유 (선택)", placeholder="상태 변경 사유를 입력하세요")
-                                
-                                col_s_save, col_s_cancel = st.columns(2)
-                                if col_s_save.form_submit_button("💾 저장", use_container_width=True):
-                                    # Update activity status
-                                    record_key = rep.get('record_key')
-                                    current_user = st.session_state.get('user_manager_name') or st.session_state.get('user_branch') or '관리자'
-                                    
-                                    activity_logger.save_activity_status(
-                                        record_key=record_key,
-                                        status=new_status,
-                                        notes=status_note or rep.get('content', ''),
-                                        user_name=current_user
-                                    )
-                                    
-                                    st.success(f"✅ 상태가 '{new_status}'로 변경되었습니다!")
-                                    st.session_state[f"status_mode_{rep.get('id', f'fallback_{idx}')}"] = False
-                                    st.cache_data.clear()
-                                    st.rerun()
-                                
-                                if col_s_cancel.form_submit_button("취소", use_container_width=True):
-                                    st.session_state[f"status_mode_{rep.get('id', f'fallback_{idx}')}"] = False
-                                    st.rerun()
             else:
                 st.info("선택한 조건에 맞는 방문 기록이 없습니다.")
         else:
@@ -3851,14 +3818,14 @@ if raw_df is not None:
     if st.session_state.user_role == 'admin' and active_nav == "👁️ 모니터링":
         st.subheader("👁️ 시스템 활동 모니터링")
         
-        # Period selection
+        # [RE-ADDED] Define period_days here to fix NameError
         col_p1, col_p2 = st.columns([3, 1])
         with col_p1:
             period_days = st.selectbox(
                 "📅 조회 기간",
                 [7, 30, 90],
                 format_func=lambda x: f"최근 {x}일",
-                key="monitor_period"
+                key="monitor_period_admin"
             )
         with col_p2:
             sync_col1, sync_col2 = st.columns(2)
@@ -4027,178 +3994,81 @@ if raw_df is not None:
         else:
             st.info(f"최근 {period_days}일 동안의 접속 기록이 없습니다.")
 
-
-
     # [TAB] Map & Analysis
     if active_nav == "🗺️ 지도 & 분석":
-        # Log tab access
-        
         with st.expander("🗺️ 조건조회", expanded=True):
-            # Marker for Mobile Visibility Control
             st.markdown('<div id="mobile-filter-marker"></div>', unsafe_allow_html=True)
-            # st.subheader("🗺️ 조건조회")
             
-            # [MOVED] Global Date Range Filter
             st.markdown("##### 🕵️ 기간 조회 (최종수정일 기준)")
             st.caption("전체 탭(지도, 통계, 리스트)에 공통 적용됩니다.")
             
-            # [FIX] Do NOT tie the widget key directly to the global state. 
-            # Doing so forces Streamlit to auto-overwrite the state with incomplete tuples instantly.
             g_val = st.date_input(
                 "조회 기간 선택",
                 value=st.session_state.global_date_range,
                 label_visibility="collapsed",
-                key="tab_mod_period" # Decoupled key
+                key="tab_mod_period"
             )
             
-            # [NEW] Validation message for incomplete range
             if isinstance(st.session_state.get('tab_mod_period'), (list, tuple)):
                 if len(st.session_state.tab_mod_period) == 1:
                     st.warning("⚠️ 종료일을 선택해주세요.")
             st.divider()
 
-            # [MOVED] AI Analysis Block removed from here
-
-
-            # [FEATURE] Condition View Toolbar (Quick Filters)
-            # [UX] Mobile-Friendly Layout: Strict 2x3 Grid
-            
-            # [NEW] Expert Feature: Sales Opportunity Discovery Mode
             st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
-            opp_mode = st.toggle("🚀 영업기회 발굴 모드 (최근 15일 신규/폐업 감지)", value=False, help="최근 15일 이내의 신규 인허가 또는 폐업 리스트만 집중적으로 보여줍니다. 빠른 기회 포착을 위해 사용하세요.")
+            opp_mode = st.toggle("🚀 영업기회 발굴 모드 (최근 15일 신규/폐업 감지)", value=False, help="최근 15일 이내의 신규 인허가 또는 폐업 리스트만 집중적으로 보여줍니다.")
             
             if opp_mode:
                 st.caption("✅ **발굴 모드 활성화됨**: 최근 15일간의 변화(신규/폐업)만 필터링합니다.")
-                # Force flags for logic downstream or calculate mask immediately
-                q_new = False # Ignore manual checkbox visually (or logical override)
-                q_closed = False 
+                q_new, q_closed = False, False 
             else:
-                # Row 1: Date Filters
-                st.markdown("<div style='margin-bottom: -10px;'></div>", unsafe_allow_html=True) # Spacer
+                st.markdown("<div style='margin-bottom: -10px;'></div>", unsafe_allow_html=True)
                 c_q_r1_1, c_q_r1_2 = st.columns(2)
-                with c_q_r1_1: q_new = st.checkbox("🆕 신규(15일)", value=False, key="chk_q_new", help="최근 15일 이내 개업(인허가)된 건")
-                with c_q_r1_2: q_closed = st.checkbox("🚫 폐업(15일)", value=False, key="chk_q_closed", help="최근 15일 이내 폐업된 건")
+                with c_q_r1_1: q_new = st.checkbox("🆕 신규(15일)", value=False, key="chk_q_new")
+                with c_q_r1_2: q_closed = st.checkbox("🚫 폐업(15일)", value=False, key="chk_q_closed")
 
-            # Row 2: Property Filters
             c_q_r2_1, c_q_r2_2, c_q_r2_3 = st.columns(3)
             with c_q_r2_1: q_hosp = st.checkbox("🏥 병원만", value=False, key="chk_q_hosp")
             with c_q_r2_2: q_large = st.checkbox("🏗️ 100평↑", value=False, key="chk_q_large")
             with c_q_r2_3: q_stopped = st.checkbox("🛑 정지시설", value=False, key="chk_q_stopped")
-
-            # remove divider to save space
             
-            # [FIX] CRITICAL: Use base_df (filtered by Sidebar) instead of raw df
-            # This ensures Map respects Branch/Manager/Address filters from Sidebar.
-            map_df_base = base_df.dropna(subset=['lat', 'lon']).copy()
-
-            # [FEATURE] Apply Quick Filters (Pre-Filtering for Dynamic Dropdowns)
-            # 1. Date Filters (OR Logic: New OR Closed)
-            
-            # [FIX] Complete rewrite of Date Filtering to guarantee strictly correct DataFrame sizing
             cutoff_15d = GLOBAL_MAX_DATE - pd.Timedelta(days=15)
-            filtered_df = pd.DataFrame() # Empty fallback
-            
+            map_df_base = base_df.dropna(subset=['lat', 'lon']).copy()
+                
             if opp_mode:
                 if '인허가일자' in map_df_base.columns and '폐업일자' in map_df_base.columns:
-                    map_df_base['인허가일자'] = pd.to_datetime(map_df_base['인허가일자'], errors='coerce')
-                    map_df_base['폐업일자'] = pd.to_datetime(map_df_base['폐업일자'], errors='coerce')
-                    
                     mask = (map_df_base['인허가일자'] >= cutoff_15d) | (map_df_base['폐업일자'] >= cutoff_15d)
                     map_df_base = map_df_base[mask.fillna(False)]
             elif q_new or q_closed:
                 mask = pd.Series(False, index=map_df_base.index)
-                
-                if q_new and '인허가일자' in map_df_base.columns:
-                    map_df_base['인허가일자'] = pd.to_datetime(map_df_base['인허가일자'], errors='coerce')
-                    new_mask = (map_df_base['인허가일자'] >= cutoff_15d)
-                    if '영업상태명' in map_df_base.columns:
-                        new_mask = new_mask & (map_df_base['영업상태명'] != '폐업')
-                    mask = mask | new_mask.fillna(False)
-                    
-                if q_closed and '폐업일자' in map_df_base.columns:
-                    map_df_base['폐업일자'] = pd.to_datetime(map_df_base['폐업일자'], errors='coerce')
-                    closed_mask = (map_df_base['폐업일자'] >= cutoff_15d)
-                    mask = mask | closed_mask.fillna(False)
-                    
+                if q_new: mask = mask | (map_df_base['인허가일자'] >= cutoff_15d).fillna(False)
+                if q_closed: mask = mask | (map_df_base['폐업일자'] >= cutoff_15d).fillna(False)
                 map_df_base = map_df_base[mask]
-
-            # 2. Property Filters (AND Logic)
-            if q_hosp:
-                 if '업태구분명' in map_df_base.columns:
-                     map_df_base = map_df_base[map_df_base['업태구분명'].astype(str).str.contains('병원|의원', na=False)]
-
-            if q_large:
-                 if '소재지면적' in map_df_base.columns:
-                     map_df_base['소재지면적_ad'] = pd.to_numeric(map_df_base['소재지면적'], errors='coerce').fillna(0)
-                     map_df_base = map_df_base[map_df_base['소재지면적_ad'] >= 330.0]
-
-            if q_stopped:
-                 import glob
-                 fixed_files = glob.glob("data/*0224*.xlsx")
-                 if fixed_files:
-                      fixed_file_p = fixed_files[0]
-                      st.toast(f"📍 정지 데이터 로드 중: {os.path.basename(fixed_file_p)}", icon="ℹ️")
-                      f_df, _, _, _ = data_loader.load_fixed_coordinates_data(fixed_file_p)
-                      if f_df is not None:
-                           status_columns = [c for c in f_df.columns if any(p in c for p in ['상태', '정지', '영업'])]
-                           f_mask = pd.Series([False] * len(f_df), index=f_df.index)
-                           for c in status_columns:
-                                f_mask = f_mask | f_df[c].astype(str).str.contains('정지|일시정지|해지', na=False)
-                           map_df_base = f_df[f_mask].dropna(subset=['lat', 'lon']).copy()
-                           st.toast(f"✅ 정지 시설 {len(map_df_base)}곳 로드 완료", icon="🛑")
-                      else:
-                           st.error("정지 데이터를 로드할 수 없습니다.")
-                 else:
-                      st.warning("⚠️ 정지 데이터 파일을 찾을 수 없습니다.")
-
-            # Reduced spacing here
-
-            # [UX] Mobile-Friendly Layout: 2x2 Grid for Selectboxes
-            c_f_r1_1, c_f_r1_2 = st.columns(2)
-
-            # [Dynamic Dropdowns]
-            # Logic: Type Selection should filter Region/Manager lists.
-            # We need to peek at the current 'map_biz_type' from session state if available
-            current_map_type = st.session_state.get('map_biz_type', "전체")
-
-            # [REMOVED] Local Branch/Manager Dropdowns (User Request)
-            # Defaulting to "전체" to maintain logic flow
-            sel_map_region = "전체"
-            sel_map_sales = "전체"
-            
-            # Placeholder for layout if needed, or just remove columns usage
-            # Filter base for options based on Type (if selected)
-            options_source_df = map_df_base.copy()
-            if current_map_type != "전체" and '업태구분명' in options_source_df.columns:
-                options_source_df = options_source_df[options_source_df['업태구분명'] == current_map_type]
-
-            # Re-using columns for Type logic or just skipping
-            # with c_f_r1_1: ... removed
-            # with c_f_r1_2: ... removed
 
             c_f_r2_1, c_f_r2_2 = st.columns(2)
             with c_f_r2_1:
-                # Business Type Options - Should these be filtered by Region?
-                # User asked for "Type selection -> Dynamic".
-                # Usually, Type list comes from the Quick-filtered Base.
+                # 1. Region selection
+                branches = ["전체"] + sorted([str(b) for b in map_df_base['관리지사'].dropna().unique() if b])
+                sel_map_region = st.selectbox("관리지사/지역", branches, key="map_region_filter")
+                
+                # 2. Dynamic Business Type selection
                 map_type_col = '업태구분명' if '업태구분명' in map_df_base.columns else map_df_base.columns[0]
-                try:
-                    # Type options come from the filters BEFORE Type selection (to allow changing type)
-                    # But should reflect Region selection? "Dynamic" implies full cross-filtering.
-                    # Let's try to filter Type options by Region if Region is selected.
-                    type_source_df = map_df_base
-                    if sel_map_region != "전체":
-                        type_source_df = type_source_df[type_source_df['관리지사'] == sel_map_region]
-
-                    map_type_opts = ["전체"] + sorted(list(type_source_df[map_type_col].dropna().unique()))
-                except:
-                    map_type_opts = ["전체"]
+                type_source_df = map_df_base
+                if sel_map_region != "전체":
+                    type_source_df = type_source_df[type_source_df['관리지사'] == sel_map_region]
+                map_type_opts = ["전체"] + sorted(list(type_source_df[map_type_col].dropna().unique()))
                 sel_map_type = st.selectbox("업종(업태)", map_type_opts, key="map_biz_type")
 
             with c_f_r2_2:
-                 # Status Dropdown (Public)
-                 map_status_opts = ["전체", "영업/정상", "폐업"]
-                 sel_map_status = st.selectbox("영업상태 (공공)", map_status_opts, key="map_status_filter")
+                # 3. Dynamic Manager selection (SP담당) - [RESTORED]
+                mgr_source_df = map_df_base
+                if sel_map_region != "전체":
+                    mgr_source_df = mgr_source_df[mgr_source_df['관리지사'] == sel_map_region]
+                managers = ["전체"] + sorted([str(m) for m in mgr_source_df['SP담당'].dropna().unique() if m])
+                sel_map_sales = st.selectbox("영업담당(SP)", managers, key="map_sales_filter")
+                
+                # 4. Global Sales Status selection
+                map_status_opts = ["전체", "영업/정상", "폐업"]
+                sel_map_status = st.selectbox("영업상태 (공공)", map_status_opts, key="map_status_filter")
             
             # [FEATURE] Activity Status Filter (Internal)
             st.markdown("##### 📍 활동 상태별 필터")
@@ -4376,7 +4246,7 @@ if raw_df is not None:
                  ].copy()
                  
                  open_counts = trend_base_df[['date', 'date_str']].copy()
-                 open_counts['status'] = '신규수집/영업'
+                 open_counts['status'] = '영업'
                  open_counts['count'] = 0
                  
                  if not open_15d.empty:
@@ -4427,7 +4297,7 @@ if raw_df is not None:
                     x=alt.X('date_str:O', sort=sorted_date_strs, axis=alt.Axis(title='날짜 (2026)', labelAngle=-45)), 
                     y=alt.Y('count:Q', title='건수'),
                     color=alt.Color('status:N', 
-                                    scale=alt.Scale(domain=['영업', '폐업'], range=['#AED581', '#EF9A9A']), 
+                                    scale=alt.Scale(domain=['영업', '폐업'], range=['#4CAF50', '#FFCDD2']), 
                                     legend=alt.Legend(title="구분")),
                     tooltip=['date_str', 'status', 'count']
                 ).properties(
@@ -5011,6 +4881,16 @@ else:
     # [FIX] Global Injection of Button Status Colors
     # Calling it at the end ensures all UI elements are rendered and observer is attached.
     inject_button_color_script()
+
+    # [FEATURE] Sidebar System Status
+    total_records = len(base_df) if 'base_df' in locals() else 0
+    st.sidebar.markdown(f"""
+    ---
+    **🖥️ 시스템 정보**
+    - 데이터 총 건수: `{total_records:,}건`
+    - 최신 배포 버전: `v20260407-1545`
+    - 엔진: Streamlit / Python 3.12
+    """)
 
 # Main execution completed by top-level script
 pass
