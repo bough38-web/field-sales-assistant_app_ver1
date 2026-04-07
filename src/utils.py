@@ -89,7 +89,7 @@ def vectorize_normalize_address(series: pd.Series) -> pd.Series:
     # We use a combined regex for efficiency on large datasets
     region_pattern = re.compile('|'.join(re.escape(k) for k in replacements.keys()))
     def replace_regions(text):
-        if not text: return text
+        if not isinstance(text, str) or not text: return text
         return region_pattern.sub(lambda m: replacements[m.group(0)], text)
 
     # Use map for single pass
