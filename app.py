@@ -1214,9 +1214,15 @@ if uploaded_dist:
                  # [FEATURE] Store data stats in session state for later "Help" (?) query
                  st.session_state['data_load_stats'] = stats
              
-             # [NEW v13] Admin Sync Notification
+             # [NEW v13] Admin Sync Notification - Enhanced with detailed status
              if st.session_state.get('show_admin_sync_toast') and st.session_state.get('user_role') == 'admin':
-                 st.toast("🔑 로그인 동기화 완료 (Admin Only)", icon="✅")
+                 results = st.session_state.get('last_sync_results', {})
+                 msg = "🔑 시스템 데이터 동기화 완료\n"
+                 msg += f"• 주소 마스터: {'✅' if results.get('Address Master') else '⚠️'}\n"
+                 msg += f"• 활동/로그 데이터: {'✅' if results.get('Activity History') else '⚠️'}\n"
+                 msg += f"• API 설정 정보: {'✅' if results.get('API Config') else '⚠️'}"
+                 
+                 st.toast(msg, icon="⚙️")
                  st.session_state['show_admin_sync_toast'] = False
              
     elif data_source == "OpenAPI 연동 (Auto)" and api_df is not None:

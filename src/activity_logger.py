@@ -505,16 +505,51 @@ def sync_to_gsheet(filename, data, **kwargs):
 
 
 def pull_from_gsheet():
-    """Download data from Google Sheets to local storage (Initial Sync)"""
+    """Download data from Google Sheets and verify integrated components (Initial Sync)"""
     if not HAS_GSHEETS: return
+    
+    # Initialize sync status tracking
+    sync_results = {
+        "Address Master": False,
+        "Activity History": False,
+        "API Config": False,
+        "Logs": False
+    }
     
     try:
         if "connections" not in st.secrets or "gsheets" not in st.secrets.connections:
+            st.session_state['last_sync_results'] = sync_results
             return
             
         conn = st.connection("gsheets", type=GSheetsConnection)
         
-        # [REFINED] Use Korean worksheet names for pulling too
+        # 1. Verify 3 Core Integrated Spreadsheets
+        # [A] Address Master
+        try:
+            m_url = st.secrets.connections.gsheets.get("address_master_sheet", "")
+            if m_url:
+                # Just a HEAD check or small read to verify access
+                head_df = conn.read(spreadsheet=m_url, nrows=1, ttl="0s")
+                if head_df is not None: sync_results["Address Master"] = True
+        except: pass
+        
+        # [B] Activity History (Main Log Sheet)
+        try:
+            h_url = st.secrets.connections.gsheets.get("spreadsheet", "")
+            if h_url:
+                head_df = conn.read(spreadsheet=h_url, worksheet="로그인 이력", nrows=1, ttl="0s")
+                if head_df is not None: sync_results["Activity History"] = True
+        except: pass
+        
+        # [C] API Config
+        try:
+            a_url = st.secrets.connections.gsheets.get("api_config_sheet", "")
+            if a_url:
+                head_df = conn.read(spreadsheet=a_url, nrows=1, ttl="0s")
+                if head_df is not None: sync_results["API Config"] = True
+        except: pass
+
+        # 2. Pull Logs (Existing Logic)
         mapping = {
             "로그인 이력": ACCESS_LOG_FILE,
             "사용 이력": USAGE_LOG_FILE,
@@ -524,51 +559,38 @@ def pull_from_gsheet():
             "변경내역": CHANGE_HISTORY_FILE
         }
         
+        logs_ok_count = 0
         for ws_name_kr, local_path in mapping.items():
             try:
-                # Read from Korean worksheet name
                 df = conn.read(worksheet=ws_name_kr, ttl="0s")
                 if df is not None and not df.empty:
-                    # Map Korean headers back to internal keys for JSON stability
+                    # Header mapping logic
                     if ws_name_kr == "로그인 이력":
-                        # [FIX] Header Mismatch - Use "일시" instead of "상태일시"
-                        rename_map = {"일시": "timestamp", "권한": "user_role", "사용자": "user_name", "작업": "action"}
-                        df = df.rename(columns=rename_map)
+                        df = df.rename(columns={"일시": "timestamp", "권한": "user_role", "사용자": "user_name", "작업": "action"})
                     elif ws_name_kr == "사용 이력":
-                        rename_map = {"일시": "timestamp", "권한": "user_role", "사용자": "user_name", "지사": "user_branch", "작업": "action", "상세내용": "details"}
-                        df = df.rename(columns=rename_map)
-                        # JSON decode details column if it's a string
+                        df = df.rename(columns={"일시": "timestamp", "권한": "user_role", "사용자": "user_name", "지사": "user_branch", "작업": "action", "상세내용": "details"})
                         if "details" in df.columns:
-                            def safe_json_load(val):
-                                if isinstance(val, str) and (val.startswith('{') or val.startswith('[')):
-                                    try: return json.loads(val)
-                                    except: return val
-                                return val
-                            df["details"] = df["details"].apply(safe_json_load)
+                            df["details"] = df["details"].apply(lambda v: json.loads(v) if isinstance(v, str) and (v.startswith('{') or v.startswith('[')) else v)
                     elif ws_name_kr == "조회 이력":
-                        rename_map = {"일시": "timestamp", "권한": "user_role", "사용자": "user_name", "대상": "target", "상세내용": "details"}
-                        df = df.rename(columns=rename_map)
+                        df = df.rename(columns={"일시": "timestamp", "권한": "user_role", "사용자": "user_name", "대상": "target", "상세내용": "details"})
 
-                    # Convert back to JSON structure
                     if ws_name_kr == "활동상태":
-                        # Dict by record_key
-                        new_data = {}
-                        for _, row in df.iterrows():
-                            d = row.to_dict()
-                            key = d.pop("record_key", d.pop("ID", None)) # Try both
-                            if key: new_data[key] = d
+                        new_data = {row.get("record_key", row.get("ID")): row.to_dict() for _, row in df.iterrows() if row.get("record_key", row.get("ID"))}
                     else:
-                        # List of dicts
                         new_data = df.to_dict(orient="records")
                     
-                    # Save locally (Atomic) - skip_sync=True to avoid redundant write back to GSheet
                     save_json_file(local_path, new_data, skip_sync=True)
-            except Exception as inner_e:
-                print(f"DEBUG: Pulled error for {ws_name_kr}: {inner_e}")
-                
+                    logs_ok_count += 1
+            except: continue
+        
+        if logs_ok_count > 0: sync_results["Logs"] = True
+        
     except Exception as e:
         print(f"DEBUG: GSheet Pull Error: {e}")
-        return False, str(e)
+    
+    # Store results for UI
+    st.session_state['last_sync_results'] = sync_results
+    return True
 
 def push_to_gsheet():
     """Manually push all local data to Google Sheets (Full Sync)"""
