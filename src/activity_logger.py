@@ -53,7 +53,8 @@ def upload_to_gdrive(file_path, filename):
         
     try:
         # [DEBUG] Identify which Folder ID is being used
-        drive_folder_id = st.secrets.get("drive_folder_id") or creds_info.get("drive_folder_id")
+        gs_secrets = st.secrets.connections.gsheets if "connections" in st.secrets and "gsheets" in st.secrets.connections else {}
+        drive_folder_id = st.secrets.get("drive_folder_id") or gs_secrets.get("drive_folder_id")
         print(f"DEBUG: GDrive - Detected Folder ID: {drive_folder_id}")
         
         # Upload
@@ -144,6 +145,7 @@ ACCESS_LOG_FILE = STORAGE_DIR / "access_logs.json"
 USAGE_LOG_FILE = STORAGE_DIR / "usage_logs.json"
 VIEW_LOG_FILE = STORAGE_DIR / "view_logs.json"
 ACTIVITY_STATUS_FILE = STORAGE_DIR / "activity_status.json"
+VISIT_REPORT_FILE = STORAGE_DIR / "visit_reports.json"
 CHANGE_HISTORY_FILE = STORAGE_DIR / "change_history.json"
 MAINTENANCE_FILE = STORAGE_DIR / "maintenance.json"
 
@@ -444,28 +446,26 @@ def check_gsheet_connection():
         
     try:
         if "connections" not in st.secrets or "gsheets" not in st.secrets.connections:
-            return False, "Streamlit Secrets에 'connections.gsheets' 설정이 없습니다."
+            # [NEW] Detailed Missing Info for Local Users
+            missing_items = []
+            if "connections" not in st.secrets: missing_items.append("connections 섹션")
+            elif "gsheets" not in st.secrets.connections: missing_items.append("gsheets 서브섹션")
             
+            return False, f"설정 누락: {', '.join(missing_items)}이 없습니다. .streamlit/secrets.toml 파일을 확인해 주세요."
+            
+        gs_secrets = st.secrets.connections.gsheets
+        spreadsheet_url = gs_secrets.get("spreadsheet", "")
+        if not spreadsheet_url:
+            return False, "설정 오류: 'spreadsheet' (구글 시트 URL)이 입력되지 않았습니다."
+
         conn = st.connection("gsheets", type=GSheetsConnection)
         
         # [DEBUG] Check authentication mode
         is_service_account = False
-        try:
-            gs_secrets = st.secrets.connections.gsheets
-            pk = gs_secrets.get("private_key", "")
-            if gs_secrets.get("type") == "service_account" and pk:
-                is_service_account = True
-                if not pk.startswith("-----BEGIN"):
-                    print("[GSheet Debug] Warning: private_key does not start with BEGIN header")
-                if "\\n" in pk and "\n" not in pk:
-                    print("[GSheet Debug] Tip: private_key uses literal '\\n' instead of newlines")
-            
-            ss_url = gs_secrets.get("spreadsheet", "N/A")
-            print(f"[GSheet Debug] Mode: {'Service Account' if is_service_account else 'Public URL'}")
-            print(f"[GSheet Debug] Targeting: {ss_url[:20]}...")
-        except:
-            pass
-
+        pk = gs_secrets.get("private_key", "")
+        if gs_secrets.get("type") == "service_account" and pk and pk != "":
+            is_service_account = True
+        
         # [REFINED] Internal Diagnostic Loop
         discovered_ws = []
         try:
@@ -482,8 +482,8 @@ def check_gsheet_connection():
             
             # [NEW] Masked Spreadsheet ID for verification
             ss_id = "N/A"
-            if ss_id == "N/A" and ss_url and "/d/" in ss_url:
-                ss_id = ss_url.split("/d/")[1].split("/")[0]
+            if spreadsheet_url and "/d/" in spreadsheet_url:
+                ss_id = spreadsheet_url.split("/d/")[1].split("/")[0]
             masked_id = ss_id[:5] + "..." + ss_id[-5:] if len(ss_id) > 10 else ss_id
             
             return True, f"연결 성공! ({mode_text}, ID: {masked_id}, 확인된 탭: {', '.join(discovered_ws) if discovered_ws else '알수없음'})"
@@ -849,7 +849,6 @@ def get_view_logs(limit=100):
 
 # ===== VISIT REPORTS (Text, Voice, Photo) =====
 
-VISIT_REPORT_FILE = STORAGE_DIR / "visit_reports.json"
 VISIT_MEDIA_DIR = STORAGE_DIR / "visits"
 VISIT_MEDIA_DIR.mkdir(exist_ok=True)
 

@@ -2782,6 +2782,27 @@ if raw_df is not None:
             st.session_state.clear()
             st.query_params.clear()
             st.rerun()
+
+        # [NEW] Google Spreadsheet Management
+        st.markdown("---")
+        st.markdown("📊 **구글 시트 연동 관리**")
+        
+        col_gs1, col_gs2 = st.columns(2)
+        with col_gs1:
+            if st.button("🔌 연결 확인", use_container_width=True):
+                success, msg = activity_logger.check_gsheet_connection()
+                if success: st.success(msg)
+                else: st.error(msg)
+        with col_gs2:
+            if st.button("🔄 즉시 동기화", help="로컬 데이터를 구글 시트로 강제 전송합니다.", use_container_width=True):
+                success, msg = activity_logger.push_to_gsheet()
+                if success: st.success(msg)
+                else: st.error(msg)
+        
+        if st.button("📥 데이터 불러오기 (Pull)", help="구글 시트의 데이터를 로컬로 가져옵니다. (초기 설정 시 유용)", use_container_width=True):
+            with st.spinner("시트 데이터 내려받는 중..."):
+                activity_logger.pull_from_gsheet()
+                st.success("데이터 불러오기 완료! 앱을 재시작해 주세요.")
     # [LOGGING] View/Filter Logging
     # We track changes in key filters
     
@@ -3510,7 +3531,8 @@ if raw_df is not None:
                 from datetime import datetime, timedelta
                 days_map = {"최근 7일": 7, "최근 30일": 30, "최근 90일": 90}
                 cutoff_days = days_map[sel_period]
-                # [FIX] Timezone-Naive Robust Comparison (Matching usage_logger.py v4)
+                # [FIX] Define now_kst using utils helper
+                now_kst = utils.get_now_kst()
                 cutoff_date = (now_kst - timedelta(days=cutoff_days)).replace(tzinfo=None)
                 
                 temp_reports = []
