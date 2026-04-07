@@ -26,9 +26,37 @@ def normalize_str(s: Any) -> Optional[str]:
     return b_norm
 
 def _process_and_merge_district_data(target_df: pd.DataFrame, district_file_path_or_obj: Any) -> Tuple[pd.DataFrame, List[Dict], Optional[str]]:
-    """
-    Common logic to process district file, match addresses, and merge with target_df.
-    """
+    # 1. Load District File
+    try:
+        # [NEW] GSheet Fallback if no file provided
+        if not district_file_path_or_obj:
+            if "connections" in st.secrets and "gsheets" in st.secrets.connections:
+                district_file_path_or_obj = st.secrets.connections.gsheets.get("address_master_sheet", "")
+                if district_file_path_or_obj:
+                    # Logging for transparency
+                    print(f"DEBUG: Using Address Master GSheet from secrets: {district_file_path_or_obj}")
+
+        if not district_file_path_or_obj:
+            return target_df, [], "District file is missing. Please upload or configure Address Master GSheet URL in secrets."
+
+        if isinstance(district_file_path_or_obj, str) and district_file_path_or_obj.startswith("http"):
+            # Use requests to download with proper GSheet export handling
+            url = district_file_path_or_obj
+            if "docs.google.com" in url and "/edit" in url:
+                url = url.replace("/edit", "/export?format=xlsx")
+            
+            import io
+            response = requests.get(url, timeout=20)
+            response.raise_for_status()
+            df_district = pd.read_excel(io.BytesIO(response.content))
+        else:
+            df_district = pd.read_excel(district_file_path_or_obj)
+            
+        if df_district is None or df_district.empty:
+            return target_df, [], "Loaded district data is empty."
+            
+    except Exception as e:
+        return target_df, [], f"Error reading District file (GSheet or Local): {e}"
 
     # 2. Normalize District Data with Robust Column Mapping
     # Standardize column names to NFC for consistent indexing across OS (Mac/Linux)
