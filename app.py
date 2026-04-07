@@ -1237,7 +1237,7 @@ if uploaded_dist:
         with st.spinner("🚀 파일 분석 및 매칭중..."):
              # [FIX] Unpack 4 values (df, mgr_info, error, stats)
              # [FORCE REFRESH] Added salt to invalidate old cache and force reload of April 5th data
-             raw_df, mgr_info_list, error, stats = data_loader.load_and_process_data(uploaded_zip, uploaded_dist, salt="v20260407_1456")
+             raw_df, mgr_info_list, error, stats = data_loader.load_and_process_data(uploaded_zip, uploaded_dist, salt="v20260407_1532")
              
              if stats:
                  # [FEATURE] Store data stats in session state for later "Help" (?) query
@@ -1396,10 +1396,22 @@ if raw_df is not None:
                         g_visited = len(raw_df[raw_df['활동진행상태'] == '방문'])
                     
                     c1, c2 = st.columns(2)
-                    c1.metric("전체 (반영)", f"{g_total:,}")
+                    c1.metric("전체 (총계)", f"{g_total:,}")
                     
                     delta_val = f"{(g_visited/g_total*100):.1f}%" if g_total > 0 else None
-                    c2.metric("방문 (완료)", f"{g_visited:,}", delta=delta_val)
+                    c2.metric("방문추진율", f"{delta_val}" if delta_val else "0%", delta=f"{g_visited:,}건")
+
+                    # [SYSTEM INFO] Version and Data Cap visibility for Streamlit Cloud
+                    st.sidebar.markdown(f"""
+                    <div style='background-color: #f8f9fa; padding: 10px; border-radius: 8px; border: 1px solid #e9ecef; margin-bottom: 20px;'>
+                        <p style='margin-bottom: 5px; font-size: 0.8rem; color: #666;'>📊 <b>시스템 정보</b></p>
+                        <ul style='list-style-type: none; padding-left: 0; margin-bottom: 0; font-size: 0.75rem; color: #444;'>
+                            <li>데이터 상한: <b>2026-04-05</b> (고정)</li>
+                            <li>시스템 버전: <b>v2026.04.07.15:48</b></li>
+                            <li>동기화 상태: <b>정상 (Active)</b></li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
                     # [FEATURE] Detailed Count Breakdown
                     stats = st.session_state.get('data_load_stats', {})
@@ -1407,11 +1419,11 @@ if raw_df is not None:
                     a_cnt = stats.get('after', g_total)
                     d_cnt = b_cnt - a_cnt
                     if d_cnt > 0:
-                        st.caption(f"ℹ️ 원본 {b_cnt:,}건 중 중복 {d_cnt:,}건 제외")
+                        st.sidebar.caption(f"ℹ️ 원본 {b_cnt:,}건 중 중복 {d_cnt:,}건 제외")
                     
                     if g_total > 0:
                         prog = g_visited / g_total
-                        st.progress(min(prog, 1.0))
+                        st.sidebar.progress(min(prog, 1.0))
 
     # -------------------------------------------------------------
     # [FEATURE] Role-Based Landing Page
