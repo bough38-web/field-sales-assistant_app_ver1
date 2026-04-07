@@ -25,56 +25,77 @@ def normalize_str(s: Any) -> Optional[str]:
         return b_norm + '지사'
     return b_norm
 
+@st.cache_data(ttl=3600, show_spinner="🌐 마스터 데이터 불러오는 중...")
+def get_cached_address_master(url: str) -> pd.DataFrame:
+    """
+    Downloads and performs initial normalization of the Address Master GSheet.
+    Cached for 1 hour to reduce network overhead.
+    """
+    if "docs.google.com" in url and "/edit" in url:
+        url = url.replace("/edit", "/export?format=xlsx")
+    
+    import io
+    response = requests.get(url, timeout=20)
+    response.raise_for_status()
+    df = pd.read_excel(io.BytesIO(response.content))
+    
+    if df is not None and not df.empty:
+        # Standardize column names immediately
+        df.columns = [unicodedata.normalize('NFC', str(c)).strip() for c in df.columns]
+        
+        # Combine address parts early
+        addr_parts = [c for c in ['주소시', '주소군구', '주소동'] if c in df.columns]
+        if addr_parts:
+            df['full_address'] = df[addr_parts].fillna('').astype(str).apply(lambda x: ' '.join(x).strip(), axis=1)
+        else:
+            addr_col = next((c for c in df.columns if any(p in c for p in ['설치주소', '도로명주소', '소재지주소', '주소'])), None)
+            if addr_col:
+                df['full_address'] = df[addr_col]
+        
+        # Initial normalization of address series
+        if 'full_address' in df.columns:
+            df['full_address_norm'] = vectorize_normalize_address(df['full_address'])
+            df = df.dropna(subset=['full_address_norm']).drop_duplicates(subset=['full_address_norm'])
+            
+    return df
+
 def _process_and_merge_district_data(target_df: pd.DataFrame, district_file_path_or_obj: Any) -> Tuple[pd.DataFrame, List[Dict], Optional[str]]:
-    # 1. Load District File
+    # 1. Load District File (with Caching for GSheet)
     try:
-        # [NEW] GSheet Fallback if no file provided
         if not district_file_path_or_obj:
             if "connections" in st.secrets and "gsheets" in st.secrets.connections:
                 district_file_path_or_obj = st.secrets.connections.gsheets.get("address_master_sheet", "")
-                if district_file_path_or_obj:
-                    # Logging for transparency
-                    print(f"DEBUG: Using Address Master GSheet from secrets: {district_file_path_or_obj}")
 
         if not district_file_path_or_obj:
-            return target_df, [], "District file is missing. Please upload or configure Address Master GSheet URL in secrets."
+            return target_df, [], "District file is missing. Configure Address Master GSheet in secrets."
 
         if isinstance(district_file_path_or_obj, str) and district_file_path_or_obj.startswith("http"):
-            # Use requests to download with proper GSheet export handling
-            url = district_file_path_or_obj
-            if "docs.google.com" in url and "/edit" in url:
-                url = url.replace("/edit", "/export?format=xlsx")
-            
-            import io
-            response = requests.get(url, timeout=20)
-            response.raise_for_status()
-            df_district = pd.read_excel(io.BytesIO(response.content))
+            # Use CACHED loading for URL
+            df_district = get_cached_address_master(district_file_path_or_obj)
         else:
+            # Local file - direct load
             df_district = pd.read_excel(district_file_path_or_obj)
+            df_district.columns = [unicodedata.normalize('NFC', str(c)).strip() for c in df_district.columns]
             
+            addr_parts = [c for c in ['주소시', '주소군구', '주소동'] if c in df_district.columns]
+            if addr_parts:
+                df_district['full_address'] = df_district[addr_parts].fillna('').astype(str).apply(lambda x: ' '.join(x).strip(), axis=1)
+            else:
+                addr_col = next((c for c in df_district.columns if any(p in c for p in ['설치주소', '도로명주소', '소재지주소', '주소'])), None)
+                if addr_col:
+                    df_district['full_address'] = df_district[addr_col]
+            
+            if 'full_address' in df_district.columns:
+                df_district['full_address_norm'] = vectorize_normalize_address(df_district['full_address'])
+                df_district = df_district.dropna(subset=['full_address_norm']).drop_duplicates(subset=['full_address_norm'])
+
         if df_district is None or df_district.empty:
             return target_df, [], "Loaded district data is empty."
             
     except Exception as e:
-        return target_df, [], f"Error reading District file (GSheet or Local): {e}"
+        return target_df, [], f"Error reading District data: {e}"
 
-    # 2. Normalize District Data with Robust Column Mapping
-    # Standardize column names to NFC for consistent indexing across OS (Mac/Linux)
-    df_district.columns = [unicodedata.normalize('NFC', str(c)).strip() for c in df_district.columns]
-    
-    # Try to combine specific address components if '주소시' exists
-    addr_parts = [c for c in ['주소시', '주소군구', '주소동'] if c in df_district.columns]
-    if addr_parts:
-        # [FIX] Use more robust join logic to avoid TypeError in different pandas/OS environments
-        df_district['full_address'] = df_district[addr_parts].fillna('').astype(str).apply(lambda x: ' '.join(x).strip(), axis=1)
-    else:
-        # Try candidate names for address
-        addr_col = next((c for c in df_district.columns if any(p in c for p in ['설치주소', '도로명주소', '소재지주소', '주소'])), None)
-        if addr_col:
-            df_district['full_address'] = df_district[addr_col]
-        else:
-            return target_df, [], "District file must contain an address column (e.g., '주소' or '설치주소')."
-
+    # 2. Normalize District Data (Branch/Manager mapping)
     # Try candidate names for Branch
     branch_col = next((c for c in df_district.columns if any(p in c for p in ['관리지사', '지사'])), None)
     if branch_col:

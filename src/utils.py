@@ -85,10 +85,15 @@ def vectorize_normalize_address(series: pd.Series) -> pd.Series:
         '  ': ' ',
         '-': ''
     }
-    for old, new in replacements.items():
-        s = s.str.replace(old, new, regex=False)
-    
-    # Final strip
+    # Apply all region-specific replacements in a single pass if possible
+    # We use a combined regex for efficiency on large datasets
+    region_pattern = re.compile('|'.join(re.escape(k) for k in replacements.keys()))
+    def replace_regions(text):
+        if not text: return text
+        return region_pattern.sub(lambda m: replacements[m.group(0)], text)
+
+    # Use map for single pass
+    s = s.map(replace_regions)
     s = s.str.strip()
     
     # Mask short or invalid
