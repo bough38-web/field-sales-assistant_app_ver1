@@ -16,25 +16,19 @@ def generate_map_html(map_df, kakao_key, use_heatmap, center_lat, center_lon):
     def clean_series(series):
         return series.astype(str).str.replace('"', '&quot;', regex=False).str.replace("'", "&#39;", regex=False).str.replace('\n', ' ', regex=False).str.replace('\\', '\\\\', regex=False).replace({'nan': '', 'None': ''})
 
-    map_df['title'] = clean_series(map_df['사업장명'])
-    map_df['addr'] = clean_series(map_df['소재지전체주소'].fillna(''))
-    
-    # [FIX] Directly use the standardized road address column
-    if '도로명전체주소' in map_df.columns:
-        map_df['road_addr'] = clean_series(map_df['도로명전체주소'].fillna(''))
+    # [NEW] Modified Date Formatting for Marker Label (MM-DD)
+    if '최종수정시점' in map_df.columns:
+        # 1. Convert to datetime if not already (ensure timezone-naive)
+        mod_dt = pd.to_datetime(map_df['최종수정시점'], errors='coerce').dt.tz_localize(None)
+        # 2. Extract MM-DD format
+        date_suffix = mod_dt.dt.strftime('(%m-%d)').fillna('')
+        # 3. Append to Title
+        map_df['title'] = clean_series(map_df['사업장명']) + date_suffix
+        # 4. Standard modified_date for details panel
+        map_df['modified_date'] = mod_dt.dt.strftime('%Y-%m-%d').fillna('')
     else:
-        map_df['road_addr'] = ''
-    map_df['tel'] = map_df['소재지전화'].fillna('')
-    map_df['status'] = map_df['영업상태명'].fillna('')
-    
-    # Date Formatting Vectorized
-    def format_date_series(series):
-        return series.astype(str).str.replace('.0', '', regex=False).str.strip().str.slice(0, 10).replace({'nan': '', 'None': '', 'NaT': ''})
-    
-    map_df['close_date'] = format_date_series(map_df['폐업일자']) if '폐업일자' in map_df.columns else ''
-    map_df['permit_date'] = format_date_series(map_df['인허가일자']) if '인허가일자' in map_df.columns else ''
-    map_df['reopen_date'] = format_date_series(map_df['재개업일자']) if '재개업일자' in map_df.columns else ''
-    map_df['modified_date'] = format_date_series(map_df['최종수정시점']) if '최종수정시점' in map_df.columns else ''
+        map_df['title'] = clean_series(map_df['사업장명'])
+        map_df['modified_date'] = ''
     
     # [FEATURE] Business Type
     map_df['biz_type'] = map_df['업태구분명'].fillna('') if '업태구분명' in map_df.columns else ''
