@@ -127,12 +127,26 @@ def show_login_registration():
                 st.info('본인 확인을 위해 로그인해 주세요.')
 
         with tab2:
+            st.markdown("""
+                <div style="background-color: #f1f3f5; padding: 15px; border-radius: 10px; border-left: 5px solid #228be6; margin-bottom: 20px;">
+                    <h4 style="margin-top: 0; font-size: 1rem; color: #1a237e;">📝 회원가입 가이드 (Registration Guide)</h4>
+                    <ul style="font-size: 0.85rem; color: #444; padding-left: 1.2rem; margin-bottom: 0;">
+                        <li><b>사용자명 (Username):</b> <u>영문 및 숫자</u>만 가능합니다. (English/Numbers only)</li>
+                        <li><b>성함 (Full Name):</b> 한글 또는 영문 실명을 입력하세요. (Real name in KR/EN)</li>
+                        <li><b>이메일 (Email):</b> 형식에 맞는 정확한 주소를 입력하세요.</li>
+                    </ul>
+                </div>
+            """, unsafe_allow_html=True)
             try:
+                # v0.3.x style: positional title removed, use help/captions if supported or just guide above
                 if authenticator.register_user(preauthorization=False):
                     save_user_db(config['credentials'])
                     st.success('가입을 축하드립니다! 이제 로그인 탭에서 접속하세요.')
             except Exception as e:
-                st.error(f"오류: {e}")
+                if "Username" in str(e):
+                    st.error("오류: 사용자명(Username)에 한글이 포함되어 있습니다. 영문/숫자로 다시 입력해 주세요.")
+                else:
+                    st.error(f"오류: {e}")
         
         st.markdown('</div>', unsafe_allow_html=True)
 
