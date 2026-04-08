@@ -78,144 +78,130 @@ if 'authentication_status' not in st.session_state or not st.session_state['auth
 def inject_custom_css():
     st.markdown("""
     <link rel="manifest" href="/static/manifest.json">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="blue">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <style>
-        /* Modern Dashboard Card */
-        div[data-testid="stExpander"] details {
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        }
-        
-        .dashboard-card {
-            background-color: white;
-            border-radius: 12px;
-            padding: 16px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            border: 1px solid #f0f0f0;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-            margin-bottom: 10px;
-            text-align: center; /* [FIX] Center Alignment */
-        }
-        .dashboard-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 12px rgba(0,0,0,0.1);
-        }
-        
-        .card-header {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: #1a237e; /* Deep Blue */
-            margin-bottom: 8px;
-            display: flex;
-            flex-direction: column; /* [FIX] Vertical Stack for Centering */
-            justify-content: center;
-            align-items: center;
-        }
-        
-        .stat-value {
-            font-size: 1.8rem;
-            font-weight: 800;
-            color: #333;
-            margin: 4px 0;
-        }
-        
-        .stat-sub {
-            font-size: 0.85rem;
-            color: #666;
-            display: flex;
-            gap: 8px;
-            justify-content: center; /* [FIX] Center Alignment */
-        }
-        
-        .status-dot {
-            height: 8px;
-            width: 8px;
-            border-radius: 50%;
-            display: inline-block;
-            margin-right: 4px;
-        }
-        .dot-green { background-color: #4CAF50; }
-        .dot-red { background-color: #F44336; }
-        .dot-gray { background-color: #9E9E9E; }
-        
-        /* Button Tweaks */
-        .stButton button {
-            border-radius: 6px;
-            font-weight: 600;
-            transition: all 0.2s;
-        }
-        .stButton button:hover {
-            transform: translateY(-1px);
-        }
-        
-        /* Active Branch Highlight */
-        .branch-active {
-            border: 2px solid #3F51B5 !important;
-            background-color: #E8EAF6 !important;
-        }
-        
-        /* [FIX] Feature Box Vertical Centering */
-        .feature-box-centered {
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            height: 50px;
-            border: 1px solid rgba(49, 51, 63, 0.2);
-            border-radius: 8px;
-            background-color: white;
-            color: #31333F;
-            font-weight: 800;
-            font-size: 0.85rem;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        :root {
+            --primary: #228be6;
+            --primary-dark: #1c7ed6;
+            --accent: #15aabf;
+            --bg-glass: rgba(255, 255, 255, 0.8);
+            --border-glass: rgba(255, 255, 255, 0.3);
+            --shadow-soft: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
         }
 
-        /* Mobile Grid Card Styles */
-        .card-tile {
-            background-color: white;
-            border: 1px solid #eee;
-            border-radius: 10px;
-            padding: 12px;
-            margin-bottom: 10px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            transition: all 0.2s ease;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
+        body {
+            font-family: 'Inter', sans-serif !important;
+            background-color: #f8f9fa;
         }
-        .card-tile:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-            border-color: #3F51B5;
+
+        /* Glassmorphism Dashboard Card */
+        .dashboard-card {
+            background: var(--bg-glass) !important;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-radius: 16px !important;
+            padding: 20px !important;
+            border: 1px solid var(--border-glass) !important;
+            box-shadow: var(--shadow-soft) !important;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            margin-bottom: 12px !important;
+            text-align: center !important;
         }
-        .card-title-grid {
-            font-weight: 800;
-            font-size: 0.95rem;
-            color: #222;
-            margin-bottom: 5px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+        .dashboard-card:hover {
+            transform: translateY(-4px) !important;
+            box-shadow: 0 12px 40px 0 rgba(31, 38, 135, 0.12) !important;
+            border-color: var(--primary) !important;
         }
-        .card-meta-grid {
-            font-size: 0.75rem;
-            color: #666;
-            line-height: 1.4;
-            margin-bottom: 5px;
+
+        .card-header {
+            font-size: 1.15rem !important;
+            font-weight: 700 !important;
+            color: #1a237e !important;
+            margin-bottom: 10px !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
         }
-        .status-badge {
-            display: inline-block;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: bold;
-            color: white;
-            margin-bottom: 4px;
+
+        .stat-value {
+            font-size: 2.2rem !important;
+            font-weight: 800 !important;
+            background: linear-gradient(135deg, #1a237e 0%, #228be6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin: 6px 0 !important;
         }
-        .status-open { background-color: #4CAF50; }
-        .status-closed { background-color: #F44336; }
+
+        /* Premium Button Styling */
+        .stButton button {
+            width: 100% !important;
+            border-radius: 10px !important;
+            padding: 0.6rem 1rem !important;
+            font-weight: 700 !important;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%) !important;
+            color: white !important;
+            border: none !important;
+            box-shadow: 0 4px 15px rgba(34, 139, 230, 0.2) !important;
+            transition: all 0.3s ease !important;
+        }
+        .stButton button:hover {
+            transform: scale(1.02) !important;
+            box-shadow: 0 6px 20px rgba(34, 139, 230, 0.3) !important;
+            opacity: 0.95 !important;
+        }
+
+        /* Feature Badge */
+        .pro-badge {
+            background: linear-gradient(90deg, #ffd700, #ffae00) !important;
+            color: #000 !important;
+            padding: 2px 8px !important;
+            border-radius: 20px !important;
+            font-size: 0.7rem !important;
+            font-weight: 900 !important;
+            margin-left: 5px !important;
+            text-transform: uppercase !important;
+        }
+
+        /* Modern Tabs */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 24px !important;
+            background-color: transparent !important;
+        }
+        .stTabs [data-baseweb="tab"] {
+            height: 50px !important;
+            white-space: pre !important;
+            background-color: transparent !important;
+            border-radius: 4px 4px 0px 0px !important;
+            gap: 1px !important;
+            padding-top: 10px !important;
+            padding-bottom: 10px !important;
+        }
+        .stTabs [aria-selected="true"] {
+            background-color: transparent !important;
+            color: var(--primary) !important;
+            border-bottom: 3px solid var(--primary) !important;
+        }
+
+        /* Feature Box Vertical Centering */
+        .feature-box-centered {
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: center !important;
+            align-items: center !important;
+            height: 60px !important;
+            border: 1px solid var(--border-glass) !important;
+            border-radius: 12px !important;
+            background-color: white !important;
+            box-shadow: var(--shadow-soft) !important;
+        }
+
+        /* Mobile Optimization */
+        @media (max-width: 640px) {
+            .stat-value { font-size: 1.8rem !important; }
+            .dashboard-card { padding: 15px !important; }
+        }
     </style>
     """, unsafe_allow_html=True)
 
