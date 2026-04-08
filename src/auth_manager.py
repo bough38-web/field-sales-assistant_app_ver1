@@ -42,7 +42,7 @@ def get_auth_config():
             "key": "sales_assistant_signature",
             "name": "sales_assistant_cookie"
         },
-        "pre-authorized": {
+        "preauthorized": {
             "emails": []
         }
     }
@@ -92,7 +92,7 @@ def show_login_registration():
         config['cookie']['name'],
         config['cookie']['key'],
         config['cookie']['expiry_days'],
-        config['pre-authorized']
+        config['preauthorized']
     )
 
     tab1, tab2 = st.tabs(["🔒 로그인", "📝 회원가입"])
