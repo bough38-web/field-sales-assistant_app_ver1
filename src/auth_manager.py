@@ -109,7 +109,7 @@ def show_login_registration():
 
     with tab2:
         try:
-            if authenticator.register_user('회원가입', preauthorization=False):
+            if authenticator.register_user(preauthorization=False):
                 # Update our local DB with the new user from the authenticator's update
                 save_user_db(config['credentials'])
                 st.success('가입을 축하드립니다! 이제 로그인 탭에서 접속하세요.')
