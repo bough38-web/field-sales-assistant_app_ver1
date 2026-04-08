@@ -78,7 +78,7 @@ if 'authentication_status' not in st.session_state or not st.session_state['auth
 def inject_custom_css():
     st.markdown("""
     <link rel="manifest" href="/static/manifest.json">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <style>
@@ -86,121 +86,99 @@ def inject_custom_css():
             --primary: #228be6;
             --primary-dark: #1c7ed6;
             --accent: #15aabf;
-            --bg-glass: rgba(255, 255, 255, 0.8);
-            --border-glass: rgba(255, 255, 255, 0.3);
-            --shadow-soft: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+            --bg-glass: rgba(255, 255, 255, 0.85);
+            --border-glass: rgba(255, 255, 255, 0.4);
+            --shadow-soft: 0 12px 40px rgba(0, 0, 0, 0.08);
         }
 
-        body {
-            font-family: 'Inter', sans-serif !important;
-            background-color: #f8f9fa;
+        /* [EXPERT] Animated Gradient Background */
+        .stApp {
+            background: radial-gradient(circle at top right, #e7f5ff 0%, #ffffff 50%, #f1f3f5 100%);
+            font-family: 'Inter', 'Noto Sans KR', sans-serif !important;
         }
 
         /* Glassmorphism Dashboard Card */
         .dashboard-card {
             background: var(--bg-glass) !important;
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            border-radius: 16px !important;
-            padding: 20px !important;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-radius: 20px !important;
+            padding: 24px !important;
             border: 1px solid var(--border-glass) !important;
             box-shadow: var(--shadow-soft) !important;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-            margin-bottom: 12px !important;
-            text-align: center !important;
+            transition: all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1) !important;
+            margin-bottom: 20px !important;
         }
         .dashboard-card:hover {
-            transform: translateY(-4px) !important;
-            box-shadow: 0 12px 40px 0 rgba(31, 38, 135, 0.12) !important;
+            transform: translateY(-6px) !important;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12) !important;
             border-color: var(--primary) !important;
         }
 
-        .card-header {
-            font-size: 1.15rem !important;
-            font-weight: 700 !important;
-            color: #1a237e !important;
-            margin-bottom: 10px !important;
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
+        /* Typography Highlighting */
+        h1, h2, h3 {
+            font-family: 'Noto Sans KR', sans-serif !important;
+            font-weight: 900 !important;
+            letter-spacing: -0.02em !important;
         }
 
         .stat-value {
-            font-size: 2.2rem !important;
-            font-weight: 800 !important;
+            font-size: 2.4rem !important;
+            font-weight: 900 !important;
             background: linear-gradient(135deg, #1a237e 0%, #228be6 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin: 6px 0 !important;
+            margin: 8px 0 !important;
         }
 
         /* Premium Button Styling */
         .stButton button {
             width: 100% !important;
-            border-radius: 10px !important;
-            padding: 0.6rem 1rem !important;
+            border-radius: 12px !important;
+            padding: 0.8rem 1rem !important;
             font-weight: 700 !important;
             background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%) !important;
             color: white !important;
             border: none !important;
-            box-shadow: 0 4px 15px rgba(34, 139, 230, 0.2) !important;
-            transition: all 0.3s ease !important;
+            box-shadow: 0 8px 20px rgba(34, 139, 230, 0.25) !important;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
         .stButton button:hover {
-            transform: scale(1.02) !important;
-            box-shadow: 0 6px 20px rgba(34, 139, 230, 0.3) !important;
-            opacity: 0.95 !important;
+            transform: translateY(-2px) scale(1.01) !important;
+            box-shadow: 0 12px 28px rgba(34, 139, 230, 0.35) !important;
         }
 
         /* Feature Badge */
         .pro-badge {
-            background: linear-gradient(90deg, #ffd700, #ffae00) !important;
+            background: linear-gradient(135deg, #ffd700 0%, #ffae00 100%) !important;
             color: #000 !important;
-            padding: 2px 8px !important;
-            border-radius: 20px !important;
-            font-size: 0.7rem !important;
+            padding: 4px 12px !important;
+            border-radius: 30px !important;
+            font-size: 0.75rem !important;
             font-weight: 900 !important;
-            margin-left: 5px !important;
-            text-transform: uppercase !important;
+            box-shadow: 0 2px 8px rgba(255, 174, 0, 0.3) !important;
         }
+
+        /* Hide Streamlit elements for cleaner look */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
 
         /* Modern Tabs */
         .stTabs [data-baseweb="tab-list"] {
-            gap: 24px !important;
-            background-color: transparent !important;
+            display: flex;
+            justify-content: center;
+            border-bottom: none !important;
         }
         .stTabs [data-baseweb="tab"] {
-            height: 50px !important;
-            white-space: pre !important;
-            background-color: transparent !important;
-            border-radius: 4px 4px 0px 0px !important;
-            gap: 1px !important;
-            padding-top: 10px !important;
-            padding-bottom: 10px !important;
+            font-weight: 800;
+            color: #888;
+            transition: all 0.2s ease;
         }
         .stTabs [aria-selected="true"] {
-            background-color: transparent !important;
             color: var(--primary) !important;
-            border-bottom: 3px solid var(--primary) !important;
-        }
-
-        /* Feature Box Vertical Centering */
-        .feature-box-centered {
-            display: flex !important;
-            flex-direction: column !important;
-            justify-content: center !important;
-            align-items: center !important;
-            height: 60px !important;
-            border: 1px solid var(--border-glass) !important;
-            border-radius: 12px !important;
-            background-color: white !important;
-            box-shadow: var(--shadow-soft) !important;
-        }
-
-        /* Mobile Optimization */
-        @media (max-width: 640px) {
-            .stat-value { font-size: 1.8rem !important; }
-            .dashboard-card { padding: 15px !important; }
         }
     </style>
     """, unsafe_allow_html=True)
