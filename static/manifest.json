@@ -1,0 +1,17 @@
+{
+  "name": "영업기회 Pro",
+  "short_name": "영업Pro",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#228be6",
+  "description": "전국 영업 전문가를 위한 AI 기회 분석 툴",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/1087/1087815.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,12 +1,20 @@
+# Deploy Timestamp: 2026-03-11 07:05:00 (Version: 20260301-v18-final-ready)
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import pandas as pd
 import altair as alt
 import os
 import glob
 import unicodedata
-import streamlit.components.v1 as components
-from datetime import datetime
+import json
+import zipfile
+import math
+import argparse
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timedelta
 
 # Import modularized components
 from src import utils
@@ -17,19 +25,35 @@ from src import report_generator
 from src import activity_logger  # Activity logging and status tracking
 from src import usage_logger  # Usage tracking for admin monitoring
 from src import voc_manager  # VOC / Request Manager
-from src.ai_scoring import calculate_ai_scores # [NEW] Expert Feat 1: AI Scoring
 
-# [NEW] Monetization & Auth Components
-from src import auth_manager
-from src import payment_manager
-from src import legal_manager
+# [RELEASE] Version: 20260301-v18-final-ready
+# [FIX] Global Baseline for Maintenance Mode (Prevent NameError)
+maintenance = {"enabled": False, "message": "점검 및 업데이트 중이니 잠시만 기다려주세요."}
+
+# [SYSTEM] Initial Sync - Pull from GSheet if local data is missing (Cloud Persistence Fix)
+if 'initial_sync_done' not in st.session_state:
+    with st.spinner("🔄 서버 데이터 동기화 중..."):
+        try:
+            # Check if local logs exist, if not pull from GSheet
+            from src.activity_logger import ACCESS_LOG_FILE, USAGE_LOG_FILE
+            if not ACCESS_LOG_FILE.exists() or ACCESS_LOG_FILE.stat().st_size < 10:
+                activity_logger.pull_from_gsheet()
+                st.session_state.initial_sync_done = True
+                print("DEBUG: Initial Sync from GSheet completed.")
+        except Exception as e:
+            print(f"DEBUG: Initial Sync Error: {e}")
+    st.session_state.initial_sync_done = True
+from src.ai_scoring import calculate_ai_scores # [NEW] Expert Feat 1: AI Scoring
 
 # --- Global Constants & Normalization ---
 GLOBAL_BRANCH_ORDER = ['중앙지사', '강북지사', '서대문지사', '고양지사', '의정부지사', '남양주지사', '강릉지사', '원주지사', '미지정']
 GLOBAL_BRANCH_ORDER = [unicodedata.normalize('NFC', b) for b in GLOBAL_BRANCH_ORDER]
 
-# [NEW] Default Google Spreadsheet for Branch Manager Matching
-DEFAULT_DISTRICT_GSHEET_URL = "https://docs.google.com/spreadsheets/d/18u0yEyw4XTKcZ2ITMgQWlebMKOQotkxZ/export?format=xlsx"
+# [NEW] Phase 5: Initial Sync from Google Sheets (Persistent Data Recovery)
+# Only runs once per session to populate local JSON storage from the cloud
+if 'gsheet_synced' not in st.session_state:
+    activity_logger.pull_from_gsheet()
+    st.session_state.gsheet_synced = True
 
 # --- Configuration & Theme ---
 st.set_page_config(
@@ -39,49 +63,34 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# [NEW] Check for payment success
-payment_manager.check_payment_status()
+# [MAINTENANCE] Check Maintenance Mode state (Global Block)
+sys_config = load_system_config()
+is_maintenance = sys_config.get("maintenance_mode", False)
 
-# [NEW] Check for Google OAuth Callback
-auth_manager.handle_google_callback()
+# Initialize Session State (Earliest possible)
+if 'user_role' not in st.session_state:
+    st.session_state.user_role = None
+if 'user_manager_name' not in st.session_state:
+    st.session_state.user_manager_name = None
+if 'user_branch' not in st.session_state:
+    st.session_state.user_branch = None
+if 'user_manager_code' not in st.session_state:
+    st.session_state.user_manager_code = None
+if 'visit_active' not in st.session_state:
+    st.session_state.visit_active = False
+if 'visit_data' not in st.session_state:
+    st.session_state.visit_data = {}
 
-# [NEW] Authentication Wrapper
-if 'authentication_status' not in st.session_state or not st.session_state['authentication_status']:
-    st.markdown("## 💼 영업기회 관리 시스템 Pro")
-    st.markdown("""
-    <div style="background: #f0f2f6; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
-        <h3>🚀 전국 1,300명 이상의 영업 전문가가 선택한 도구</h3>
-        <p>현장의 데이터를 실시간으로 수집하고, AI 분석을 통해 최적의 결정을 내리세요.</p>
-        <div style="display: flex; gap: 20px; font-size: 0.9rem; color: #666;">
-            <span>✅ 신규 사업자 실시간 알림</span>
-            <span>✅ AI 기회 점수 산출</span>
-            <span>✅ 원터치 방문 보고서</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    auth_manager.show_login_registration()
-    
-    # [NEW] Social Login Section
-    st.markdown("<div style='text-align: center; margin: 20px 0; color: #666;'>─ 또는 ─</div>", unsafe_allow_html=True)
-    google_url = auth_manager.get_google_login_url()
-    if google_url:
-        st.link_button("🔵 Google 계정으로 계속하기", google_url, use_container_width=True)
-    else:
-        st.info("💡 Google 로그인을 사용하려면 관리자 설정(Secrets)이 필요합니다.")
-    
-    st.markdown("---")
-    st.caption("🛡️ 데이터 보안 및 SSL 암호화 적용 | 💳 안전한 카드 결제 시스템 연동")
-    st.stop() # Stop execution if not logged in
+if is_maintenance and st.session_state.user_role != 'admin':
+    st.warning("🚧 **시스템 점검 안내**")
+    st.error("현재 시스템 점검 중입니다. 잠시 후 다시 접속해 주세요.")
+    st.info(f"📅 점검 내용: {sys_config.get('notice_content', '정기 점검')}")
+    st.stop()
 
 # [DESIGN] Inject Custom CSS for Modern UI
 def inject_custom_css():
     st.markdown("""
-    <link rel="manifest" href="/static/manifest.json">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="blue">
     <style>
-        /* Modern Dashboard Card */
         div[data-testid="stExpander"] details {
             border: 1px solid #e0e0e0;
             border-radius: 8px;
@@ -275,7 +284,7 @@ if "visit_action" in st.query_params:
             # We should update the status to '방문' immediately when clicked on map.
             if q_key:
                 u_name = st.session_state.get('user_manager_name') or st.session_state.get('user_branch') or "Unknown"
-                activity_logger.save_activity_status(q_key, '방문', f"모바일 지도에서 방문 처리 ({u_name})", u_name, user_branch=st.session_state.get('user_branch'), user_role=st.session_state.get('user_role'))
+                activity_logger.save_activity_status(q_key, '방문', f"모바일 지도에서 방문 처리 ({u_name})", u_name)
                 # Also log a system visit report? User said "방문 이력에 나오도록"
                 activity_logger.save_visit_report(
                     record_key=q_key,
@@ -324,9 +333,36 @@ if "interest_action" in st.query_params:
             i_title, i_addr, i_lat, i_lon
         )
         
+        # 1. Address Master Status
+        m_status = "✅" if res.get("Address Master") else "⚠️"
+        if not res.get("Address Master") and res.get("Errors", {}).get("Address Master"):
+            m_status += f" ({res['Errors']['Address Master'][:30]}...)"
+        
+        # 2. Activity History Status
+        h_status = "✅" if res.get("Activity History") else "⚠️"
+        if not res.get("Activity History") and res.get("Errors", {}).get("Activity History"):
+            h_status += f" ({res['Errors']['Activity History'][:30]}...)"
+        
+        # 3. API Config Status
+        a_status = "✅" if res.get("API Config") else "⚠️"
+        if not res.get("API Config") and res.get("Errors", {}).get("API Config"):
+            a_status += f" ({res['Errors']['API Config'][:30]}...)"
+        
+        # [NEW] Determine Connection Mode Label
+        mode_label = " (공개 링크 방식으로 연동됨)" if res.get("Public_Mode") else " (정식 인증 완료)"
+        
+        sync_msg = f"🔑 **시스템 데이터 동기화 완료**{mode_label}\n\n• 주소 마스터: {m_status}\n• 활동/로그 데이터: {h_status}\n• API 설정 정보: {a_status}"
+        
+        if not all([res.get("Address Master"), res.get("Activity History"), res.get("API Config")]):
+            st.toast(sync_msg, icon="⚠️")
+            
+            # Show hint only if it's not even a public connection
+            if not res.get("Public_Mode"):
+                st.info("💡 **팁**: `secrets.toml`에 구글 서비스 계정 정보(인증키)가 등록되지 않았거나, 시트 공유 설정이 '링크가 있는 모든 사용자'가 아닙니다.")
+        else:
+            st.toast(sync_msg, icon="✅")
+        
         # [NEW] Also log to Visit History as "Interest Marked"
-        # Use a specific status or just a log? User said "appear in visit history".
-        # We'll create a system-generated visit report.
         u_name = st.session_state.get('user_manager_name') or st.session_state.get('user_branch') or "Unknown"
         if i_title and i_addr:
             # Generate key
@@ -410,7 +446,6 @@ if st.session_state.get("visit_active"):
                 if not photo_val:
                     photo_val = st.file_uploader("또는 사진 업로드 (최대 3장)", type=['jpg', 'png', 'jpeg'], label_visibility="collapsed", accept_multiple_files=True)
 
-
             submitted = st.form_submit_button("💾 방문 결과 저장", type="primary", use_container_width=True)
             
             if submitted:
@@ -435,7 +470,7 @@ if st.session_state.get("visit_active"):
                             audio_val, 
                             photo_val, 
                             u_info,
-                            forced_status="✅ 방문"  # Ensure status is saved to activity_status.json
+                            forced_status="✅ 방문"
                         )
                         
                         if success:
@@ -598,22 +633,9 @@ def update_manager_with_status(name, status, branch=None):
 # --- Sidebar Filters ---
 with st.sidebar:
     # [FAILSAFE] Emergency Logout & Debug (Render First - Guaranteed Visibility)
-    if st.session_state.get('authentication_status'):
-         username = st.session_state.get('username')
-         name = st.session_state.get('name', 'User')
-         tier = auth_manager.get_user_tier(username)
-         tier_icon = "⭐" if tier == "pro" else "⚪"
-         tier_name = "Premium (Pro)" if tier == "pro" else "Standard (Basic)"
-         
-         st.markdown(f"**{tier_icon} {name}님 ({tier_name})**")
-         
-         if tier != "pro":
-             with st.expander("🚀 Pro로 업그레이드 하세요", expanded=True):
-                 st.caption("AI 기회 분석 및 데이터 무제한 활용")
-                 if st.button("요금제 보기", key="sidebar_upgrade_btn", use_container_width=True, type="primary"):
-                     st.session_state.show_pricing = True
-         
-         if st.button("🚨 로그아웃", key="btn_logout_clean", use_container_width=True):
+    if st.session_state.get('user_role'):
+         st.markdown(f"**🟢 [System] {st.session_state.get('user_role')} 접속중**")
+         if st.button("🚨 로그아웃 (Emergency)", key="btn_logout_emergency", type="primary", use_container_width=True):
              st.session_state.clear()
              st.rerun()
          st.divider()
@@ -628,70 +650,101 @@ with st.sidebar:
         - 필터를 사용하여 지사, 담당자, 업태, 영업상태 등을 선택할 수 있습니다
         """)
     
+    # [NEW] Unified Admin Google Sheet Shortcuts
+    if st.session_state.get('user_role') == 'admin':
+        st.markdown("#### 🔗 관리자 전용 시트 바로가기")
+        c1, c2 = st.columns(2)
+        with c1:
+            sync_url = "https://docs.google.com/spreadsheets/d/1xxu8sM1pfyYhJcBraypsqs06q3ZQLluxWsBqS8QbvUs/edit"
+            st.link_button("📊 활동 동기화 (기존)", sync_url, use_container_width=True)
+        with c2:
+            manager_url = "https://docs.google.com/spreadsheets/d/18u0yEyw4XTKcZ2ITMgQWlebMKOQotkxZ/edit"
+            st.link_button("📝 담당자 관리 (현행화)", manager_url, use_container_width=True)
+        st.divider()
+
+        # [NEW] Admin Forced Collection Section (Period selection)
+        st.markdown("#### 🚀 강제 데이터 수집 (기간 설정)")
+        c_f1, c_f2 = st.columns(2)
+        with c_f1:
+            default_start = datetime.now() - timedelta(days=1)
+            force_start = st.date_input("수집 시작일", value=default_start, key="force_start")
+        with c_f2:
+            default_end = datetime.now() - timedelta(days=1)
+            force_end = st.date_input("수집 종료일", value=default_end, key="force_end")
+        
+        if st.button("🚀 강제 수집 실행", use_container_width=True, type="primary", key="btn_force_fetch"):
+            if force_start > force_end:
+                 st.error("시작일이 종료일보다 늦을 수 없습니다.")
+            else:
+                 diff_days = (force_end - force_start).days + 1
+                 st.info(f"{force_start} ~ {force_end} ({diff_days}일분) 수집을 시작합니다...")
+                 
+                 with st.spinner("📦 데이터 수집 및 처리 중... (몇 분 정도 소요될 수 있습니다)"):
+                     try:
+                         # Resolve daily_fetch.py path relative to app.py
+                         script_path = os.path.join(os.path.dirname(__file__), "일일데이터 공공데이터포털_API 가져오기", "daily_fetch.py")
+                         
+                         cmd = [
+                             sys.executable, script_path,
+                             "--mode", "DAILY",
+                             "--date", force_end.strftime("%Y-%m-%d"),
+                             "--days", str(diff_days),
+                             "--workers", "15" # High workers for manual fetch
+                         ]
+                         
+                         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                         
+                         if result.returncode == 0:
+                             st.success("✅ 강제 수집이 성공적으로 완료되었습니다!")
+                             usage_logger.log_usage('admin', st.session_state.get('user_manager_name', 'System'), st.session_state.get('user_branch', ''), 'forced_fetch', {'start': str(force_start), 'end': str(force_end), 'days': diff_days})
+                             st.cache_data.clear()
+                             st.rerun()
+                         else:
+                             st.error(f"❌ 수집 중 오류가 발생했습니다: {result.stderr or result.stdout}")
+                     except Exception as e:
+                         st.error(f"❌ 시스템 오류: {e}")
+        st.divider()
+
     # [NEW] Highly Visible GSheet Sync Section (Admin Only)
     if st.session_state.get('user_role') == 'admin':
-        with st.expander("🔄 구글 시트 데이터 동기화", expanded=True):
+        with st.expander("🔄 활동 로그 시트 데이터 수동 동기화", expanded=False):
             st.caption("활동 이력을 구글 시트와 즉시 동기화합니다.")
             
-            # [NEW] Direct Link to Google Sheet
-            try:
-                ss_url = st.secrets.connections.gsheets.get("spreadsheet")
-                if ss_url:
-                    st.link_button("🚀 구글 스프레드시트 바로가기", ss_url, use_container_width=True, type="primary")
-                    st.divider()
-            except: pass
-
-            st.info("💡 **구글 드라이브 설정 안내**\n사진 저장 폴더의 '공유' 버튼을 눌러 아래 계정을 **편집자**로 추가해야 링크가 생성됩니다:\n`field-sales-assistant@my-project-field-sales-488900.iam.gserviceaccount.com`")
-            
-            # [NEW] Check GDrive Folder ID status
-            drive_id = st.secrets.get("drive_folder_id")
-            if not drive_id:
-                try: drive_id = st.secrets.connections.gsheets.get("drive_folder_id")
-                except: pass
-                
-            if drive_id:
-                st.success(f"📁 사진 저장 폴더 ID 설정됨")
-            else:
-                st.warning("⚠️ 'drive_folder_id'가 Secrets에 없습니다. (0GB 용량 제한 주의)")
-
-
-            if st.button("🔌 연결 상태 확인", use_container_width=True, key="sync_check_st_main"):
+            if st.button("🔌 연결 상태 확인", use_container_width=True, key="sync_check_main"):
+                # [LOG] Sync Connection Check
+                usage_logger.log_usage(st.session_state.get('user_role'), st.session_state.get('user_manager_name', 'System'), st.session_state.get('user_branch', ''), 'sync_check', {'action': 'connection_check'})
                 with st.spinner("구글 시트 연결 확인 중..."):
                     success, msg = activity_logger.check_gsheet_connection()
-                    if success: 
-                        st.success(msg)
-                        # [NEW] Show which sheet is linked
-                        try:
-                            ss_url = st.secrets.connections.gsheets.get("spreadsheet", "")
-                            if ss_url:
-                                st.caption(f"🔗 연결된 시트 주소: {ss_url[:40]}...")
-                        except: pass
+                    if success: st.success(msg)
                     else: 
                         st.error(msg)
                         st.info("💡 **조치**: 시트 '공유' 버튼 클릭 -> 서비스 계정 이메일을 '편집자'로 추가")
             
             c_sync1, c_sync2 = st.columns(2)
             with c_sync1:
-                if st.button("🔄 시트로 올리기", use_container_width=True, key="sync_push_st_main"):
+                if st.button("🔄 시트로 올리기", use_container_width=True, key="sync_push_main"):
+                    # [LOG] Sync Push
+                    usage_logger.log_usage(st.session_state.get('user_role'), st.session_state.get('user_manager_name', 'System'), st.session_state.get('user_branch', ''), 'sync_push', {'action': 'manual_push'})
                     with st.spinner("전송 중..."):
                         success, msg = activity_logger.push_to_gsheet()
                         if success: st.success(msg)
                         else: st.error(msg)
             with c_sync2:
-                if st.button("📥 시트에서 받기", use_container_width=True, key="sync_pull_st_main"):
+                if st.button("📥 시트에서 받기", use_container_width=True, key="sync_pull_main"):
+                    # [LOG] Sync Pull
+                    usage_logger.log_usage(st.session_state.get('user_role'), st.session_state.get('user_manager_name', 'System'), st.session_state.get('user_branch', ''), 'sync_pull', {'action': 'manual_pull'})
                     with st.spinner("가져오는 중..."):
                         activity_logger.pull_from_gsheet()
                         st.success("완료!")
                         st.rerun()
-
-            with st.sidebar.expander("🛠 기술 지원 정보 (Debug)", expanded=False):
+    
+            with st.expander("🛠 기술 지원 정보 (Debug)", expanded=False):
                 try:
                     ss_url = st.secrets.connections.gsheets.get("spreadsheet", "N/A")
                     st.caption(f"Spreadsheet ID: ...{ss_url[-15:] if 'd/' in ss_url else 'N/A'}")
-                    st.caption(f"App Version: 20260301-v2")
+                    st.caption(f"App Version: 20260301-v18-final-ready")
                 except:
                     st.caption("Secrets 로드 실패")
-
     
     st.markdown("---")
 
@@ -710,13 +763,18 @@ with st.sidebar:
             ["파일 업로드 (File)", "OpenAPI 연동 (Auto)"],
             index=0
         )
+        if 'last_data_source' not in st.session_state:
+            st.session_state.last_data_source = data_source
+        elif st.session_state.last_data_source != data_source:
+            usage_logger.log_usage(st.session_state.get('user_role', 'user'), st.session_state.get('user_name', 'unknown'), st.session_state.get('user_branch', ''), 'data_source_change', {'from': st.session_state.last_data_source, 'to': data_source})
+            st.session_state.last_data_source = data_source
         
         # [FIX] Enhanced File Selection with 20260119 Priority
         local_zips = sorted(glob.glob(os.path.join("data", "*.zip")), key=os.path.getmtime, reverse=True)
         local_excels = sorted(glob.glob(os.path.join("data", "*.xlsx")), key=os.path.getmtime, reverse=True)
         
-        # Force Priority for 20260119
-        priority_file_match = [f for f in local_excels if '20260119' in f]
+        # Force Priority for 20260304
+        priority_file_match = [f for f in local_excels if '20260304' in f]
         if priority_file_match:
             # Move to front
             for p in priority_file_match:
@@ -726,68 +784,96 @@ with st.sidebar:
         uploaded_dist = None
         use_local_dist = False
 
-        if local_excels:
-            use_local_dist = st.radio("영업구역(담당자) 로드 방식", ["구글 시트 (자동)", "로컬 파일 (수동)"], index=0)
-            
-            if use_local_dist == "구글 시트 (자동)":
-                uploaded_dist = DEFAULT_DISTRICT_GSHEET_URL
-                st.success("✅ **구글 시트** 연동됨")
-                st.caption(f"ID: 18u0y... (최종수정 반영)")
-            else:
-                # Let user choose if multiple
-                file_opts = [os.path.basename(f) for f in local_excels]
-                sel_file_idx = 0
-                
-                # Try to default to the 20260119 one if present in opts
-                for i, fname in enumerate(file_opts):
-                    if '20260119' in fname:
-                        sel_file_idx = i
-                        break
-                        
-                sel_file = st.selectbox("사용할 로컬 영업구역 파일", file_opts, index=sel_file_idx)
-                uploaded_dist = os.path.join("data", sel_file)
-                
-                if '20260119' in sel_file:
-                     st.success(f"✅ **[로컬]** 로드된 파일: {sel_file}")
-                else:
-                     st.warning(f"⚠️ 로드된 파일: {sel_file} (20260119 파일 권장)")
+        st.markdown("#### 👤 담당자/영업구역 데이터 로드")
+        dist_mode = st.radio(
+            "로드 방식 선택",
+            ["구글 시트 실시간 연동 (자동)", "로컬 Excel 파일 (수동)"],
+            index=0,
+            horizontal=True
+        )
         
-        if not local_excels:
-            uploaded_dist = st.file_uploader("영업구역 데이터 (Excel)", type="xlsx", key="dist_uploader")
-            if not uploaded_dist:
+        if dist_mode == "구글 시트 실시간 연동 (자동)":
+            # [NEW] Load from secrets if available, fallback to provided default
+            gs_secrets = st.secrets.get("connections", {}).get("gsheets", {})
+            DEFAULT_DISTRICT_GSHEET_URL = gs_secrets.get("address_master_sheet", "https://docs.google.com/spreadsheets/d/18u0yEyw4XTKcZ2ITMgQWlebMKOQotkxZ/edit")
+            
+            # Google Sheets export URL for immediate reflection
+            if "/edit" in DEFAULT_DISTRICT_GSHEET_URL:
+                uploaded_dist = DEFAULT_DISTRICT_GSHEET_URL.replace("/edit", "/export?format=xlsx")
+            else:
                 uploaded_dist = DEFAULT_DISTRICT_GSHEET_URL
-                st.info("💡 파일 업로드 전에는 **구글 시트(기본)**를 사용합니다.")
+                
+            st.success("✅ **주소현행화 시트**와 실시간 연동되었습니다.")
+            
+        else:
+            if local_excels:
+                use_local_dist = st.toggle("로컬 파일 선택", value=True)
+                if use_local_dist:
+                    # Let user choose if multiple
+                    file_opts = [os.path.basename(f) for f in local_excels]
+                    sel_file_idx = 0
+                    
+                    # Try to default to the 20260304 one if present in opts
+                    for i, fname in enumerate(file_opts):
+                        if '20260304' in fname:
+                            sel_file_idx = i
+                            break
+                            
+                    sel_file = st.selectbox("사용할 영업구역 파일", file_opts, index=sel_file_idx)
+                    uploaded_dist = os.path.join("data", sel_file)
+                    
+                    if '20260304' in sel_file:
+                         st.success(f"✅ **[최신]** 로드된 파일: {sel_file}")
+                    else:
+                         st.warning(f"⚠️ 로드된 파일: {sel_file} (20260304 파일 권장)")
+        
+            if not uploaded_dist:
+                uploaded_dist = st.file_uploader("영업구역 데이터 (Excel)", type="xlsx", key="dist_uploader")
 
         uploaded_zip = []
         
         if data_source == "파일 업로드 (File)":
-             if local_zips:
-                 use_local_zip = st.toggle("인허가(Zip) 자동 로드", value=True)
-                 if use_local_zip:
-                     # Let user choose zip if multiple
-                     zip_opts = [os.path.basename(f) for f in local_zips]
-                     # [UX] Auto-select priority data files if available
-                     preferred_zips = [
-                         "LOCALDATA_2026_ONLY.zip", # [NEW] Extracted 2026 data
-                         "LOCALDATA_NOWMON_CSV.zip", 
-                         "LOCALDATA_NOWMON_CSV_2월.zip", 
-                         "LOCALDATA_YESTERDAY_CSV.zip"
-                     ]
-                     # Normalize for comparison
-                     preferred_zips = [unicodedata.normalize('NFC', z) for z in preferred_zips]
-                     zip_opts_norm = [unicodedata.normalize('NFC', z) for z in zip_opts]
-                     
-                     default_zips = [zip_opts[i] for i, z in enumerate(zip_opts_norm) if z in preferred_zips]
-                     if not default_zips: default_zips = zip_opts
-                     
-                     sel_zips = st.multiselect("사용할 인허가 파일 (ZIP)", zip_opts, default=default_zips)
-                     uploaded_zip = [os.path.join("data", z) for z in sel_zips]
-                     if sel_zips:
-                         st.caption(f"선택됨: {', '.join(sel_zips)}")
-                 else:
-                     uploaded_zip = st.file_uploader("인허가 데이터 (ZIP)", type="zip", accept_multiple_files=True)
-             else:
-                  uploaded_zip = st.file_uploader("인허가 데이터 (ZIP)", type="zip", accept_multiple_files=True)
+            if local_zips:
+                use_local_zip = st.toggle("인허가(Zip) 자동 로드", value=True)
+                if use_local_zip:
+                    # Let user choose zip if multiple
+                    zip_opts = [os.path.basename(f) for f in local_zips]
+                    # [UX] Auto-select priority data files if available (Use full data to include pre-2026 closed businesses)
+                    preferred_zips = [
+                        "LOCALDATA_NOWMON_CSV-4.1~4.5.zip",
+                        "LOCALDATA_NOWMON_CSV-3월.zip",
+                        "LOCALDATA_NOWMON_CSV_3월.zip",
+                        "LOCALDATA_NOWMON_CSV.zip", 
+                        "LOCALDATA_2026_ONLY.zip", 
+                        "LOCALDATA_NOWMON_CSV_2월.zip", 
+                        "LOCALDATA_YESTERDAY_CSV.zip"
+                    ]
+                    # Normalize for comparison
+                    preferred_zips = [unicodedata.normalize('NFC', z) for z in preferred_zips]
+                    zip_opts_norm = [unicodedata.normalize('NFC', z) for z in zip_opts]
+                    
+                    # [UPDATE] Select BOTH top priority files if they exist to combine data
+                    default_zips = []
+                    for pz in preferred_zips[:3]: # [FIX] Expand to top 3 to ensure combining 3월 + Baseline
+                        matching = [zip_opts[i] for i, z in enumerate(zip_opts_norm) if z == pz]
+                        if matching:
+                            default_zips.extend(matching)
+                    
+                    # [ADD] Also include daily automated extraction files
+                    daily_zips = [zip_opts[i] for i, z in enumerate(zip_opts_norm) if z.startswith("LOCALDATA_DAILY_")]
+                    default_zips.extend(daily_zips)
+                    
+                    if not default_zips and zip_opts: 
+                        default_zips = [zip_opts[0]]
+                    
+                    sel_zips = st.multiselect("사용할 인허가 파일 (ZIP)", zip_opts, default=default_zips, help="중복 방지를 위해 단일 파일 선택을 권장합니다.")
+                    uploaded_zip = [os.path.join("data", z) for z in sel_zips]
+                    if sel_zips:
+                        st.caption(f"선택됨: {', '.join(sel_zips)}")
+                else:
+                    uploaded_zip = st.file_uploader("인허가 데이터 (ZIP)", type="zip", accept_multiple_files=True)
+            else:
+                uploaded_zip = st.file_uploader("인허가 데이터 (ZIP)", type="zip", accept_multiple_files=True)
                  
         else: # OpenAPI
             st.info("🌐 지방행정 인허가 데이터 (LocalData)")
@@ -808,16 +894,10 @@ with st.sidebar:
             api_start_date = c_d1.date_input("시작일", value=today - datetime.timedelta(days=30))
             api_end_date = c_d2.date_input("종료일", value=today)
             
-            # [NEW] API Date Validation
-            if api_start_date > api_end_date:
-                st.error("⚠️ 시작일은 종료일보다 빨라야 합니다.")
-                fetch_enabled = False
-            else:
-                fetch_enabled = True
-            
-            fetch_btn = st.button("데이터 가져오기 (Fetch)", disabled=not fetch_enabled)
+            fetch_btn = st.button("데이터 가져오기 (Fetch)")
             
             if fetch_btn and api_auth_key:
+                usage_logger.log_usage(st.session_state.get('user_role', 'user'), st.session_state.get('user_name', 'unknown'), st.session_state.get('user_branch', ''), 'openapi_fetch', {'start': api_start_date.strftime("%Y%m%d"), 'end': api_end_date.strftime("%Y%m%d")})
                 with st.spinner("🌐 API 데이터 조회 중..."):
                     s_date = api_start_date.strftime("%Y%m%d")
                     e_date = api_end_date.strftime("%Y%m%d")
@@ -832,6 +912,52 @@ with st.sidebar:
             if 'api_fetched_df' in st.session_state:
                 api_df = st.session_state['api_fetched_df']
                 st.caption(f"✅ 수신된 데이터: {len(api_df)}건")
+
+    with st.sidebar.expander("🤖 자동화 모니터링", expanded=False):
+        st.subheader("일일 데이터 동기화 상태")
+        
+        # [FEATURE] Monitoring Logs
+        log_path = os.path.join("인허가자료db-API", "auto_sync.log")
+        if os.path.exists(log_path):
+            try:
+                with open(log_path, "r", encoding="utf-8") as f:
+                    logs = f.readlines()
+                # Show last 15 lines
+                st.text_area("최근 동기화 로그", "".join(logs[-15:]), height=180)
+            except:
+                st.info("로그를 읽는 중 오류가 발생했습니다.")
+        else:
+            st.info("동기화 로그가 아직 없습니다.")
+            
+        # [FEATURE] Latest Sync File Status
+        sync_files = glob.glob(os.path.join("data", "LOCALDATA_DAILY_*.zip"))
+        if sync_files:
+            latest_sync = max(sync_files, key=os.path.getmtime)
+            st.success(f"최근 파일: {os.path.basename(latest_sync)}")
+            st.caption(f"동기화 시점: {datetime.fromtimestamp(os.path.getmtime(latest_sync)).strftime('%Y-%m-%d %H:%M:%S')}")
+        else:
+            st.warning("자동 동기화 데이터 없음")
+            
+        # [FEATURE] Manual Trigger for Testing
+        if st.button("🚀 지금 즉시 동기화 실행", use_container_width=True):
+            usage_logger.log_usage('admin', '관리자', '전체', 'manual_sync_trigger')
+            with st.spinner("데이터 추출 및 동기화 엔진 가동 중..."):
+                import subprocess
+                try:
+                    # Run auto_sync.py from root
+                    # Using the full path to avoid issues
+                    script_path = os.path.join(os.path.dirname(__file__), "인허가자료db-API", "auto_sync.py")
+                    res = subprocess.run(["python3", script_path], capture_output=True, text=True)
+                    if res.returncode == 0:
+                        st.success("동기화가 성공적으로 완료되었습니다!")
+                        st.balloons()
+                        import time
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(f"동기화 중 오류 발생: {res.stderr}")
+                except Exception as e:
+                    st.error(f"실행 중 예외 발생: {e}")
 
 
 
@@ -848,6 +974,18 @@ with st.sidebar:
     # Only visible to Admin. Controls visibility of "Conditional Search" on mobile.
     if st.session_state.get('user_role') == 'admin':
         st.sidebar.divider()
+        st.sidebar.subheader("⚙️ 관리자 설정")
+        
+        # [NEW] Maintenance Mode Toggle
+        # [FIX] Use safe attribute access to prevent NameError in race conditions
+        current_maintenance_state = maintenance.get("enabled", False) if 'maintenance' in globals() else False
+        is_maintenance = st.sidebar.toggle("🚧 점검 모드 (공지 표시)", value=current_maintenance_state, help="모든 사용자에게 점검 안내 팝업을 표시합니다.")
+        
+        if is_maintenance != current_maintenance_state:
+            usage_logger.log_usage('admin', '관리자', '전체', 'maintenance_toggle', {'enabled': is_maintenance})
+            activity_logger.set_maintenance_mode(is_maintenance)
+            st.rerun()
+            
         show_mobile_filter = st.sidebar.toggle("📱 모바일에서 필터 표시", value=True, help="끄면 모바일 화면에서 '조건조회' 창이 사라집니다.")
         if not show_mobile_filter:
             st.markdown("""
@@ -1013,16 +1151,6 @@ with st.sidebar:
     
     st.sidebar.markdown("---")
 
-# [NEW] Pricing Overlay / Modal (Expert Technique: Full screen takeover for conversion)
-if st.session_state.get('show_pricing'):
-    st.markdown("---")
-    if st.button("❌ 닫기 (메인 화면으로)"):
-        st.session_state.show_pricing = False
-        st.rerun()
-    payment_manager.show_pricing_table()
-    st.markdown("---")
-    st.stop() # Stop showing main dashboard until pricing is dismissed or upgraded
-
     with st.sidebar.expander("🔑 카카오 지도 설정", expanded=False):
         st.warning("카카오 자바스크립트 키 필요")
         kakao_key = st.text_input("키 입력", type="password", key="kakao_api_key_v2")
@@ -1108,16 +1236,48 @@ if uploaded_dist:
     if data_source == "파일 업로드 (File)" and uploaded_zip:
         with st.spinner("🚀 파일 분석 및 매칭중..."):
              # [FIX] Unpack 4 values (df, mgr_info, error, stats)
-             # [CACHE] Added salt to force refresh after rollback fix
-             raw_df, mgr_info_list, error, stats = data_loader.load_and_process_data(uploaded_zip, uploaded_dist, salt="rollback_fix_v2")
+             # [FORCE REFRESH] Added salt to invalidate old cache and force reload of April 5th data
+             raw_df, mgr_info_list, error, stats = data_loader.load_and_process_data(uploaded_zip, uploaded_dist, salt="v20260407_1532")
              
              if stats:
                  # [FEATURE] Store data stats in session state for later "Help" (?) query
                  st.session_state['data_load_stats'] = stats
              
+             # [NEW v13] Admin Sync Notification - Enhanced with detailed status & errors
+             if st.session_state.get('show_admin_sync_toast') and st.session_state.get('user_role') == 'admin':
+                 results = st.session_state.get('last_sync_results', {})
+                 errors = results.get('Errors', {})
+                 
+                 msg = "🔑 시스템 데이터 동기화 결과\n"
+                 
+                 def fmt_status(key, name):
+                     status = '✅' if results.get(key) else '⚠️'
+                     err = errors.get(name, "")
+                     if err:
+                         # Shorten common errors for toast readability
+                         short_err = f" ({err[:25]}...)" if len(err) > 25 else f" ({err})"
+                         return f"• {name}: {status}{short_err}\n"
+                     return f"• {name}: {status}\n"
+
+                 msg += fmt_status('Address Master', '주소 마스터')
+                 msg += fmt_status('Activity History', '활동/로그 데이터')
+                 msg += fmt_status('API Config', 'API 설정 정보')
+                 
+                 # [FIX] Extra warning if credentials are missing
+                 if not results.get('Auth', True):
+                     msg += "\n💡 팁: secrets.toml에 구글 서비스 계정 정보(인증키)가 설정되어 있지 않습니다."
+                 
+                 st.toast(msg, icon="⚙️")
+                 st.session_state['show_admin_sync_toast'] = False
+             
     elif data_source == "OpenAPI 연동 (Auto)" and api_df is not None:
         with st.spinner("🌐 API 데이터 매칭중..."):
              # [FIX] Unpack 4 values
+             # Pass mtime for consistency if using local dist file
+             dist_mtime = None
+             if isinstance(uploaded_dist, str) and os.path.exists(uploaded_dist):
+                 dist_mtime = os.path.getmtime(uploaded_dist)
+                 
              raw_df, mgr_info_list, error, stats = data_loader.process_api_data(api_df, uploaded_dist)
              
              if stats:
@@ -1148,10 +1308,13 @@ if raw_df is not None:
     else:
         raw_df['관리지사'] = '미지정'
 
-    # [FIX] Global NFC Normalization 
+    # [FIX] Global NFC Normalization (Robust towards NaN/Mixed Types)
     for col in ['관리지사', 'SP담당', '사업장명', '소재지전체주소', '영업상태명', '업태구분명']:
         if col in raw_df.columns:
-            raw_df[col] = raw_df[col].astype(str).apply(lambda x: unicodedata.normalize('NFC', x).strip() if x else x)
+            # fillna('') is crucial to prevent float (NaN) from entering unicodedata.normalize
+            raw_df[col] = raw_df[col].fillna('').astype(str).apply(
+                lambda x: unicodedata.normalize('NFC', x).strip() if x else x
+            )
             
     # [FIX] HOT-RELOAD STATUS
     # Even if cached, we re-merge the latest JSON status to ensure freshness
@@ -1161,9 +1324,51 @@ if raw_df is not None:
     if raw_df is None:
         raw_df = pd.DataFrame()
 
-    # [REFACTOR] Centralized Branch List Calculation
-    # GLOBAL_BRANCH_ORDER moved to top scope for absolute consistency
+    # [NEW] Global Data Normalization: "평수" & Date Standardization
+    if not raw_df.empty:
+        # 1. Normalize "평수" (Area in Pyung)
+        if '평수' not in raw_df.columns:
+            if '소재지면적' in raw_df.columns:
+                raw_df['평수'] = pd.to_numeric(raw_df['소재지면적'], errors='coerce').fillna(0) / 3.3058
+            elif '총면적' in raw_df.columns:
+                raw_df['평수'] = pd.to_numeric(raw_df['총면적'], errors='coerce').fillna(0) / 3.3058
+            else:
+                raw_df['평수'] = 0.0
+        else:
+            raw_df['평수'] = pd.to_numeric(raw_df['평수'], errors='coerce').fillna(0.0)
+
+        # 2. Standardize Date Columns to be Timezone-Naive
+        for col in ['인허가일자', '폐업일자', '최종수정시점', '데이터기준일자']:
+            if col in raw_df.columns:
+                # [FIX] Use utc=True to safely handle mixed aware/naive, then neutralize to naive
+                raw_df[col] = pd.to_datetime(raw_df[col], errors='coerce', utc=True).dt.tz_localize(None)
+
+    # [FEATURE] Determine the actual latest date in the dataset to use instead of wall-clock time
+    # This prevents the 15-day filters from returning 0 results if the dataset is older than 15 days.
+    GLOBAL_MAX_DATE = utils.get_now_kst().normalize().replace(tzinfo=None)
+    if not raw_df.empty:
+        date_candidates = []
+        for col in ['최종수정시점', '인허가일자', '폐업일자']:
+            if col in raw_df.columns:
+                 # [FIX] Use already normalized naive datetime series
+                 max_val = raw_df[col].max()
+                 if pd.notna(max_val):
+                     date_candidates.append(max_val)
+        if date_candidates:
+            GLOBAL_MAX_DATE = max(date_candidates).normalize()
+            
+    # [FIX] Hardcap Dashboard Data and Charts to April 5th, 2026 as per user request
+    request_cap = pd.Timestamp("2026-04-05")
+    if GLOBAL_MAX_DATE > request_cap:
+        GLOBAL_MAX_DATE = request_cap
     
+    # [FIX] Remove future/noise data (e.g. May) from statistics
+    if raw_df is not None and not raw_df.empty:
+        date_cols = [c for c in ['인허가일자', '폐업일자', '최종수정시점'] if c in raw_df.columns]
+        for col in date_cols:
+            # Keep only records on or before 4/5
+            raw_df = raw_df[~(raw_df[col] > request_cap)]
+
     if raw_df is not None and not raw_df.empty:
         current_branches_raw = [unicodedata.normalize('NFC', str(b)) for b in raw_df['관리지사'].unique() if pd.notna(b)]
         
@@ -1191,10 +1396,22 @@ if raw_df is not None:
                         g_visited = len(raw_df[raw_df['활동진행상태'] == '방문'])
                     
                     c1, c2 = st.columns(2)
-                    c1.metric("전체 (반영)", f"{g_total:,}")
+                    c1.metric("전체 (총계)", f"{g_total:,}")
                     
                     delta_val = f"{(g_visited/g_total*100):.1f}%" if g_total > 0 else None
-                    c2.metric("방문 (완료)", f"{g_visited:,}", delta=delta_val)
+                    c2.metric("방문추진율", f"{delta_val}" if delta_val else "0%", delta=f"{g_visited:,}건")
+
+                    # [SYSTEM INFO] Version and Data Cap visibility for Streamlit Cloud
+                    st.sidebar.markdown(f"""
+                    <div style='background-color: #f8f9fa; padding: 10px; border-radius: 8px; border: 1px solid #e9ecef; margin-bottom: 20px;'>
+                        <p style='margin-bottom: 5px; font-size: 0.8rem; color: #666;'>📊 <b>시스템 정보</b></p>
+                        <ul style='list-style-type: none; padding-left: 0; margin-bottom: 0; font-size: 0.75rem; color: #444;'>
+                            <li>데이터 상한: <b>2026-04-05</b> (고정)</li>
+                            <li>시스템 버전: <b>v2026.04.07.15:48</b></li>
+                            <li>동기화 상태: <b>정상 (Active)</b></li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
                     # [FEATURE] Detailed Count Breakdown
                     stats = st.session_state.get('data_load_stats', {})
@@ -1202,11 +1419,11 @@ if raw_df is not None:
                     a_cnt = stats.get('after', g_total)
                     d_cnt = b_cnt - a_cnt
                     if d_cnt > 0:
-                        st.caption(f"ℹ️ 원본 {b_cnt:,}건 중 중복 {d_cnt:,}건 제외")
+                        st.sidebar.caption(f"ℹ️ 원본 {b_cnt:,}건 중 중복 {d_cnt:,}건 제외")
                     
                     if g_total > 0:
                         prog = g_visited / g_total
-                        st.progress(min(prog, 1.0))
+                        st.sidebar.progress(min(prog, 1.0))
 
     # -------------------------------------------------------------
     # [FEATURE] Role-Based Landing Page
@@ -1599,7 +1816,14 @@ if raw_df is not None:
                     sel_br_for_mgr = st.selectbox("소속 지사 선택", ["전체"] + global_branch_opts, key="login_br_sel")
                     
                     if raw_df is not None:
-                        mgr_candidates = pd.DataFrame(mgr_info_list) if 'mgr_info_list' in locals() and mgr_info_list else raw_df.copy()
+                        # [FIX] Standardize mgr_candidates to always have consistent columns
+                        if 'mgr_info_list' in locals() and mgr_info_list:
+                            mgr_candidates = pd.DataFrame(mgr_info_list)
+                            # Ensure columns are standardized if they came from mgr_info_list
+                            mgr_candidates.rename(columns={'name': 'SP담당', 'code': '영업구역 수정', 'branch': '관리지사'}, inplace=True)
+                        else:
+                            mgr_candidates = raw_df.copy()
+                        
                         if sel_br_for_mgr != "전체":
                             mgr_candidates = mgr_candidates[mgr_candidates['관리지사'] == sel_br_for_mgr]
                         
@@ -1609,8 +1833,7 @@ if raw_df is not None:
                             mgr_candidates['display'] = mgr_candidates['SP담당'].apply(mask_name)
                         
                         display_to_real_map = dict(zip(mgr_candidates['display'], mgr_candidates['SP담당']))
-                        # [FIX] Sanitize mgr_list: Remove Nulls and ensure strings to avoid TypeError in st.selectbox
-                        mgr_list = sorted([str(x) for x in mgr_candidates['display'].unique() if pd.notna(x)])
+                        mgr_list = sorted(mgr_candidates['display'].unique().tolist())
                     else:
                         mgr_list = []
                         display_to_real_map = {}
@@ -1641,8 +1864,6 @@ if raw_df is not None:
                                     
                                     activity_logger.log_access('manager', p_name, 'login')
                                     usage_logger.log_usage('manager', p_name, st.session_state.get('user_branch', ''), 'login', {'manager_code': p_code})
-                                    # [NEW] Sync from GSheet on Login
-                                    activity_logger.pull_from_gsheet()
                                     st.query_params.clear() # [FIX] Clear params
                                     st.rerun()
                                 else: st.error("패스워드가 올바르지 않습니다.")
@@ -1664,8 +1885,6 @@ if raw_df is not None:
                                 st.session_state.sb_branch = s_branch # Pre-set filter
                                 activity_logger.log_access('branch', s_branch, 'login')
                                 usage_logger.log_usage('branch', s_branch, s_branch, 'login')
-                                # [NEW] Sync from GSheet on Login
-                                activity_logger.pull_from_gsheet()
                                 st.query_params.clear() # [FIX] Clear params
                                 st.rerun()
                             else: st.error("패스워드가 올바르지 않습니다.")
@@ -1680,14 +1899,13 @@ if raw_df is not None:
                         pw = st.text_input("최고 관리자 암호", type="password", key="adm_login_pw")
                         if st.form_submit_button("통합 관리 시스템 접속 👑", type="primary", use_container_width=True):
                             if pw == "admin1234!!":
-                                st.session_state.user_role = 'admin'
-                                st.session_state.admin_auth = True
-                                activity_logger.log_access('admin', '관리자', 'login')
-                                usage_logger.log_usage('admin', '관리자', '전체', 'login')
-                                # [NEW] Sync from GSheet on Login
-                                activity_logger.pull_from_gsheet()
-                                st.query_params.clear() # [FIX] Clear any params before rerun
-                                st.rerun()
+                                 st.session_state.user_role = 'admin'
+                                 st.session_state.admin_auth = True
+                                 st.session_state['show_admin_sync_toast'] = True
+                                 activity_logger.log_access('admin', '관리자', 'login')
+                                 usage_logger.log_usage('admin', '관리자', '전체', 'login')
+                                 st.query_params.clear() # [FIX] Clear any params before rerun
+                                 st.rerun()
                             else: st.error("암호가 올바르지 않습니다.")
 
         st.markdown('</div>', unsafe_allow_html=True) # End of login-box-card
@@ -1840,8 +2058,21 @@ if raw_df is not None:
                         n_title = st.text_input("제목", value=curr_config.get("notice_title", ""))
                         n_content = st.text_area("내용", value=curr_config.get("notice_content", ""))
                         if st.form_submit_button("설정 저장"):
-                            save_system_config({"data_standard_date":new_date, "show_notice":use_notice, "notice_title":n_title, "notice_content":n_content})
+                            # [LOG] Log Config Change
+                            usage_logger.log_usage(st.session_state.get('user_role'), st.session_state.get('user_manager_name', 'Admin'), st.session_state.get('user_branch', '전체'), 'config_change', {'action': 'save_system_config'})
+                            
+                            save_system_config({
+                                "data_standard_date": new_date,
+                                "show_notice": use_notice,
+                                "notice_title": n_title,
+                                "notice_content": n_content,
+                                "maintenance_mode": st.session_state.get('new_maint_mode', curr_config.get("maintenance_mode", False))
+                            })
                             st.rerun()
+                    
+                    # [NEW] Maintenance Toggle in Form (Outside or Inside)
+                    maint_val = st.toggle("🚧 시스템 점검 모드 활성화", value=curr_config.get("maintenance_mode", False))
+                    st.session_state.new_maint_mode = maint_val
 
                 with adm_tab2: # VOC Management
                     st.subheader("요청사항(VOC) 관리")
@@ -2349,13 +2580,23 @@ if raw_df is not None:
         
         # [NEW] Initialize Date Filter from Session State (for filtering logic before UI render)
         if 'global_date_range' not in st.session_state:
-            st.session_state.global_date_range = ()
+            # [FIX] Default to the last 50 days from GLOBAL_MAX_DATE to ensure data visibility by default
+            # This prevents the 'No data to display' issue on initial load and improves performance/responsiveness.
+            default_start = (GLOBAL_MAX_DATE - timedelta(days=50)).date()
+            default_end = GLOBAL_MAX_DATE.date()
+            st.session_state.global_date_range = (default_start, default_end)
         
-        # [NEW] Ensure 'sb_mod_period' (Sidebar) and 'global_date_range' (Tab) are synced
-        if 'sb_mod_period' in st.session_state:
-            # If sidebar was changed, sync to global
-            if st.session_state.sb_mod_period != st.session_state.global_date_range:
-                st.session_state.global_date_range = st.session_state.sb_mod_period
+        # [NEW] Ensure 'sb_mod_period' (Sidebar) and 'tab_mod_period' (Tab) cleanly sync to 'global_date_range'
+        def _sync_date_state(key):
+            val = st.session_state.get(key)
+            prev_key = f"prev_{key}"
+            if isinstance(val, (list, tuple)) and val != st.session_state.get(prev_key):
+                st.session_state[prev_key] = val
+                if len(val) == 2 or len(val) == 0:
+                    st.session_state.global_date_range = val
+        
+        _sync_date_state('sb_mod_period')
+        _sync_date_state('tab_mod_period')
         
         global_date_range = st.session_state.global_date_range
         
@@ -2386,17 +2627,11 @@ if raw_df is not None:
         # 1. Branch
         # GLOBAL_BRANCH_ORDER used from top scope
         current_branches_in_raw = [unicodedata.normalize('NFC', str(b)) for b in raw_df['관리지사'].unique() if pd.notna(b)]
+        sorted_branches_for_filter = [b for b in GLOBAL_BRANCH_ORDER if b in current_branches_in_raw]
         
-        # [FIX] Admin Visibility: Always show all 9 standard branches to Administrators
-        if st.session_state.user_role == 'admin':
-            sorted_branches_for_filter = [unicodedata.normalize('NFC', b) for b in GLOBAL_BRANCH_ORDER]
-            others_in_raw = [b for b in current_branches_in_raw if b not in sorted_branches_for_filter]
-            sorted_branches_for_filter.extend(sorted(others_in_raw))
-        else:
-            sorted_branches_for_filter = [b for b in GLOBAL_BRANCH_ORDER if b in current_branches_in_raw]
-            others_for_filter = [b for b in current_branches_in_raw if b not in GLOBAL_BRANCH_ORDER]
-            sorted_branches_for_filter.extend(others_for_filter)
-            sorted_branches_for_filter = [unicodedata.normalize('NFC', b) for b in sorted_branches_for_filter]
+        others_for_filter = [b for b in current_branches_in_raw if b not in GLOBAL_BRANCH_ORDER]
+        sorted_branches_for_filter.extend(others_for_filter)
+        sorted_branches_for_filter = [unicodedata.normalize('NFC', b) for b in sorted_branches_for_filter]
 
 
 
@@ -2530,8 +2765,8 @@ if raw_df is not None:
 
         qf_col1, qf_col2 = st.columns(2)
         # Use pandas for robust date handling
-        today_ref = utils.get_now_kst().date()
-        target_date = (utils.get_now_kst() - pd.Timedelta(days=9)).date()
+        today_ref = GLOBAL_MAX_DATE.date()
+        target_date = (GLOBAL_MAX_DATE - pd.Timedelta(days=9)).date()
         
         with qf_col1:
             # Toggle logic
@@ -2549,29 +2784,22 @@ if raw_df is not None:
         if st.session_state.admin_quick_filter == 'new_7d':
              st.info(f"✨ 최근 9일 ({target_date} ~) 신규 인허가 건")
              if '인허가일자' in filter_df.columns:
-                 filter_df = filter_df[filter_df['인허가일자'].dt.date >= target_date]
+                 target_ts = pd.Timestamp(target_date)
+                 filter_df = filter_df[filter_df['인허가일자'] >= target_ts]
              
         elif st.session_state.admin_quick_filter == 'closed_7d':
              st.info(f"🚪 최근 9일 ({target_date} ~) 폐업 건")
              if '폐업일자' in filter_df.columns:
-                 filter_df = filter_df[filter_df['폐업일자'].dt.date >= target_date]
+                 target_ts = pd.Timestamp(target_date)
+                 filter_df = filter_df[filter_df['폐업일자'] >= target_ts]
 
-        def get_ym_options(column=None):
-            # [FIX] Combine Permit Date and Modified Date to ensure Mar 2026 is visible
-            all_dates = pd.Series()
-            if column:
-                if column in raw_df.columns:
-                    all_dates = raw_df[column].dropna()
-            else:
-                if '인허가일자' in raw_df.columns:
-                    all_dates = pd.concat([all_dates, raw_df['인허가일자'].dropna()])
-                if '최종수정시점' in raw_df.columns:
-                    all_dates = pd.concat([all_dates, raw_df['최종수정시점'].dropna()])
-            
-            if all_dates.empty: return []
-            return sorted(pd.to_datetime(all_dates).dt.strftime('%Y-%m').unique(), reverse=True)
+        def get_ym_options(column):
+            if column not in raw_df.columns: return []
+            dates = raw_df[column].dropna()
+            if dates.empty: return []
+            return sorted(dates.dt.strftime('%Y-%m').unique(), reverse=True)
 
-        permit_ym_opts = ["전체"] + get_ym_options()
+        permit_ym_opts = ["전체"] + get_ym_options('인허가일자')
         if 'sb_permit_ym' not in st.session_state: st.session_state.sb_permit_ym = "전체"
         sel_permit_ym = st.selectbox(
             "인허가일자 (월별)", 
@@ -2623,9 +2851,36 @@ if raw_df is not None:
         
         st.markdown("---")
         
-        # [FEATURE] Address search
-        st.markdown("##### 🔍 주소 검색")
         address_search = st.text_input("주소 검색 (예: 인천/삼산동)", value="", placeholder="주소 또는 업체명 입력...")
+        
+        st.markdown("---")
+        st.markdown("##### ⚙️ 시스템 관리")
+        if st.button("🧹 전체 캐시 초기화 (Reload)", help="오래된 데이터나 '스트림릿 찌꺼기'를 제거하고 앱을 새로고침합니다.", use_container_width=True):
+            st.cache_data.clear()
+            st.session_state.clear()
+            st.query_params.clear()
+            st.rerun()
+
+        # [NEW] Google Spreadsheet Management
+        st.markdown("---")
+        st.markdown("📊 **구글 시트 연동 관리**")
+        
+        col_gs1, col_gs2 = st.columns(2)
+        with col_gs1:
+            if st.button("🔌 연결 확인", use_container_width=True):
+                success, msg = activity_logger.check_gsheet_connection()
+                if success: st.success(msg)
+                else: st.error(msg)
+        with col_gs2:
+            if st.button("🔄 즉시 동기화", help="로컬 데이터를 구글 시트로 강제 전송합니다.", use_container_width=True):
+                success, msg = activity_logger.push_to_gsheet()
+                if success: st.success(msg)
+                else: st.error(msg)
+        
+        if st.button("📥 데이터 불러오기 (Pull)", help="구글 시트의 데이터를 로컬로 가져옵니다. (초기 설정 시 유용)", use_container_width=True):
+            with st.spinner("시트 데이터 내려받는 중..."):
+                activity_logger.pull_from_gsheet()
+                st.success("데이터 불러오기 완료! 앱을 재시작해 주세요.")
     # [LOGGING] View/Filter Logging
     # We track changes in key filters
     
@@ -2809,15 +3064,7 @@ if raw_df is not None:
         base_df = base_df[base_df[type_col].isin(sel_types)]
         
     if sel_permit_ym != "전체":
-        if '최종수정시점' in base_df.columns:
-            # [FIX] Syntax fixed: Use parentheses to wrap the entire multi-line expression
-            mask_permit = (
-                (base_df['인허가일자'].dt.strftime('%Y-%m') == sel_permit_ym) |
-                ((base_df['인허가일자'].isna()) & (base_df['최종수정시점'].dt.strftime('%Y-%m') == sel_permit_ym))
-            )
-            base_df = base_df[mask_permit]
-        else:
-            base_df = base_df[base_df['인허가일자'].dt.strftime('%Y-%m') == sel_permit_ym]
+        base_df = base_df[base_df['인허가일자'].dt.strftime('%Y-%m') == sel_permit_ym]
         
     if sel_close_ym != "전체":
         base_df = base_df[base_df['폐업일자'].dt.strftime('%Y-%m') == sel_close_ym]
@@ -2840,9 +3087,9 @@ if raw_df is not None:
                   base_df['최종수정시점'] = pd.to_datetime(base_df['최종수정시점'], errors='coerce')
              
              # [FIX] TypeError: Invalid comparison between tz-aware and tz-naive
-             # Localize filter Timestamps to Asia/Seoul (KST)
-             ts_start = pd.Timestamp(g_start).tz_localize('Asia/Seoul')
-             ts_end = (pd.Timestamp(g_end) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)).tz_localize('Asia/Seoul')
+             # We use tz-naive timestamps to match the normalized dataset format
+             ts_start = pd.Timestamp(g_start)
+             ts_end = pd.Timestamp(g_end) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
              
              base_df = base_df[
                  (base_df['최종수정시점'] >= ts_start) & 
@@ -2876,8 +3123,8 @@ if raw_df is not None:
             mask = pd.Series([False] * len(base_df), index=base_df.index)
             for keyword in keywords:
                 keyword_mask = (
-                    base_df['소재지전체주소'].astype(str).apply(lambda x: unicodedata.normalize('NFC', x)).str.contains(keyword, case=False, na=False, regex=False) |
-                    base_df['사업장명'].astype(str).apply(lambda x: unicodedata.normalize('NFC', x)).str.contains(keyword, case=False, na=False, regex=False)
+                    base_df['소재지전체주소'].astype(str).str.contains(keyword, case=False, na=False, regex=False) |
+                    base_df['사업장명'].astype(str).str.contains(keyword, case=False, na=False, regex=False)
                 )
                 mask = mask | keyword_mask  # OR logic: any keyword match
             base_df = base_df[mask]
@@ -3006,7 +3253,7 @@ if raw_df is not None:
             <p style="font-size: 0.95rem; line-height: 1.6; color: #333;">
             이 데이터는 <b>행정안전부 공공데이터</b>로 1월 변동분(신규영업, 폐업, 변동이슈발생)데이터 입니다. <br>
             지사별, 담당구역별 <b>영업(신규인허가 또는 변경이슈)</b>, <b>폐업(폐업등록)</b>된 시설로 지사/담당자별 조건 조회기능이 있으며, 
-            <b>신규/폐업(20일)</b> 체크박스 선택시 이슈 발생일로부터 20일이내 인것만 볼수 있으며, <b>병원, 100평</b> 다중조건 기능도 사용하실수 있습니다. <br>
+            <b>신규/폐업(15일)</b> 체크박스 선택시 이슈 발생일로부터 15일이내 인것만 볼수 있으며, <b>병원, 100평</b> 다중조건 기능도 사용하실수 있습니다. <br>
             특히 시설 위치를 <b>웹 지도</b>로 영업/폐업 각각 볼수 있으며 시설 선택시 기본정보 및 <b>카카오 네비게이션</b> 연결기능을 사용할수 있습니다. <br>
             웹, 모바일에서 활용할수 있는 <b>모바일리스트, 데이터 그리드</b> 기능이 있어 필요시 다운로드 활용 가능합니다.
             </p>
@@ -3017,8 +3264,9 @@ if raw_df is not None:
     # Only show for Manager/Branch roles to provide personalized insight
     if st.session_state.user_role in ['manager', 'branch'] and not df.empty:
         # Calculate stats (Last 15 days)
-        ai_now = utils.get_now_kst()
-        ai_cutoff = ai_now - pd.Timedelta(days=15)
+        # Use Dataset's Latest Date
+        ai_now = GLOBAL_MAX_DATE
+        ai_15d_ago = ai_now - pd.Timedelta(days=15)
         
         ai_df = df.copy() # Use the currently filtered df
 
@@ -3028,24 +3276,24 @@ if raw_df is not None:
                 series = ai_df[col_name]
                 if not pd.api.types.is_datetime64_any_dtype(series):
                     series = pd.to_datetime(series, errors='coerce')
-                return len(series[series >= ai_cutoff])
+                return len(series[series >= ai_15d_ago])
             return 0
 
         cnt_new = count_recent_events('인허가일자')
         cnt_closed = count_recent_events('폐업일자')
         cnt_mod = count_recent_events('최종수정시점')
 
-        user_display_name = st.session_state.user_manager_name or st.session_state.user_branch or "담당자"
+        user_display_name = st.session_state.get('user_manager_name') or st.session_state.get('user_branch') or "담당자"
 
         # Generate Message
-        guide_msg = f"**{user_display_name}**님, 최근 20일간 데이터 분석 결과입니다.\n\n"
+        guide_msg = f"**{user_display_name}**님, 최근 15일간 데이터 분석 결과입니다.\n\n"
         stats_msg = []
         if cnt_new > 0: stats_msg.append(f"🆕 **신규 인허가 {cnt_new}건**")
         if cnt_closed > 0: stats_msg.append(f"🚫 **폐업 {cnt_closed}건**")
         if cnt_mod > 0: stats_msg.append(f"🔄 **정보 수정 {cnt_mod}건**")
 
         if not stats_msg:
-            guide_msg += "최근 20일간 감지된 주요 변동 사항(신규/폐업/수정)이 없습니다."
+            guide_msg += "최근 15일간 감지된 주요 변동 사항(신규/폐업/수정)이 없습니다."
         else:
             guide_msg += ", ".join(stats_msg) + "이(가) 감지되었습니다."
 
@@ -3074,9 +3322,8 @@ if raw_df is not None:
             if not sorted_branches:
                 st.info("표시할 지사 데이터가 없습니다.")
             else:
-                # [FEATURE] Add '전체' (Total) card for Administrator overview
-                display_branches = ["전체"] + sorted_branches
-                n_cols = len(display_branches)
+                # Prepare grid - Single Row
+                n_cols = len(sorted_branches)
                 
                 # Active Branch Logic (Source of Truth)
                 if sel_branch != "전체":
@@ -3086,24 +3333,21 @@ if raw_df is not None:
                 sel_dashboard_branch = unicodedata.normalize('NFC', raw_dashboard_branch)
 
                 cols = st.columns(n_cols)
-                for idx, b_name in enumerate(display_branches):
+                for idx, b_name in enumerate(sorted_branches):
                     with cols[idx]:
                         # 1. Calculate Stats
-                        if b_name == "전체":
-                            b_df = base_df  # Overall summary in the current filtered state
-                        else:
-                            b_df = base_df[base_df['관리지사'] == b_name]
-                        
+                        b_df = base_df[base_df['관리지사'] == b_name]
                         b_total = len(b_df)
-                        count_active = len(b_df[b_df['영업상태명'] == '영업/정상'])
-                        count_closed = len(b_df[b_df['영업상태명'] == '폐업'])
+                        # [FIX] Robust match for Active/Closed status (substring match)
+                        count_active = len(b_df[b_df['영업상태명'].str.contains('영업|정상', na=False)])
+                        count_closed = len(b_df[b_df['영업상태명'].str.contains('폐업', na=False)])
                         
                         # 2. Determine Style
                         is_selected = (b_name == sel_dashboard_branch)
                         card_class = "dashboard-card branch-active" if is_selected else "dashboard-card"
                         
                         # 3. Render Card HTML
-                        disp_name = "전체" if b_name == "전체" else b_name
+                        disp_name = b_name # [STRICT] Do not strip "지사"
                         card_html = f"""
                         <div class="{card_class}">
                             <div class="card-header">
@@ -3152,7 +3396,7 @@ if raw_df is not None:
                 # 1. Start with Raw (but respect Role!)
                 mgr_df = raw_df[raw_df['관리지사'].astype(str).apply(lambda x: unicodedata.normalize('NFC', x)) == current_br_name].copy()
                 
-                # [SECURITY] Re-Apply Manager Filter here because we started from raw_df
+                # [SECURITY] Re-apply Manager Filter here because we started from raw_df
                 if st.session_state.user_role == 'manager':
                     if st.session_state.user_manager_code:
                         if '영업구역 수정' in mgr_df.columns:
@@ -3225,8 +3469,9 @@ if raw_df is not None:
                 mgr_label = item['label']
                 m_total = len(m_sub_df)
                 
-                m_active = len(m_sub_df[m_sub_df['영업상태명'] == '영업/정상'])
-                m_closed = len(m_sub_df[m_sub_df['영업상태명'] == '폐업'])
+                # [FIX] Robust match for Active/Closed status
+                m_active = len(m_sub_df[m_sub_df['영업상태명'].str.contains('영업|정상', na=False)])
+                m_closed = len(m_sub_df[m_sub_df['영업상태명'].str.contains('폐업', na=False)])
                 with m_cols[col_idx]:
                       current_sb_manager = st.session_state.get('sb_manager', "전체")
                       is_selected = (current_sb_manager == mgr_label)
@@ -3263,7 +3508,7 @@ if raw_df is not None:
 
     # [LAYOUT] Tab Structure Re-implementation for Compatibility (v1.31.0)
     # Using a high-persistence Radio Navigation to prevent Tab Jumping
-    nav_labels = ["🗺️ 지도 & 분석", "📈 상세통계", "📱 모바일 리스트", "📋 데이터 그리드", "🗣️ 관리자에게 요청하기", "📝 활동 이력"]
+    nav_labels = ["🗺️ 지도 & 분석", "📈 상세통계", "📱 모바일 리스트", "📋 데이터 그리드", "📝 활동 이력", "🗣️ 관리자에게 요청하기"]
     if st.session_state.user_role == 'admin':
         nav_labels.append("👁️ 모니터링")
         
@@ -3301,20 +3546,20 @@ if raw_df is not None:
     if active_nav == "📝 활동 이력":
         st.subheader("📝 활동 이력 관리")
         
-        # [SECURITY] Role-based access control
+        # [SECURITY] Role-based access control (Removed limit to show all data as User requested)
         if st.session_state.user_role == 'admin':
             # Admin sees all reports
-            all_reports = activity_logger.get_visit_reports(limit=200)
+            all_reports = activity_logger.get_visit_reports(limit=10000)
             st.caption("🔓 관리자 권한: 전체 활동 이력 조회 (방문, 상담중, 관심 등 모든 기록)")
         elif st.session_state.user_role == 'manager':
             # Manager sees only their own reports
             user_name = st.session_state.get('user_manager_name')
-            all_reports = activity_logger.get_visit_reports(user_name=user_name, limit=200)
+            all_reports = activity_logger.get_visit_reports(user_name=user_name, limit=10000)
             st.caption(f"🔒 담당자 '{user_name}' 님의 활동 이력 (방문, 상담, 관심 등)")
         elif st.session_state.user_role == 'branch':
             # Branch user sees only their branch reports
             user_branch = st.session_state.get('user_branch')
-            all_reports = activity_logger.get_visit_reports(user_branch=user_branch, limit=200)
+            all_reports = activity_logger.get_visit_reports(user_branch=user_branch, limit=10000)
             st.caption(f"🔒 '{user_branch}' 지사의 활동 이력 (방문, 상담, 관심 등)")
         else:
             # Unknown role - no access
@@ -3327,11 +3572,21 @@ if raw_df is not None:
             col_f1, col_f2, col_f3 = st.columns(3)
             
             with col_f1:
-                branches = ["전체"] + sorted(list(set([r.get('user_branch', '') for r in all_reports if r.get('user_branch')])))
+                # [FIX] Cast to str and filter NaN to prevent TypeError in sorted()
+                branches = ["전체"] + sorted(list(set([
+                    str(r.get('user_branch')).strip() 
+                    for r in all_reports 
+                    if r.get('user_branch') and not pd.isna(r.get('user_branch'))
+                ])))
                 sel_branch = st.selectbox("🏢 지사", branches, key="visit_branch_filter")
             
             with col_f2:
-                managers = ["전체"] + sorted(list(set([r.get('user_name', '') for r in all_reports if r.get('user_name')])))
+                # [FIX] Cast to str and filter NaN to prevent TypeError in sorted()
+                managers = ["전체"] + sorted(list(set([
+                    str(r.get('user_name')).strip() 
+                    for r in all_reports 
+                    if r.get('user_name') and not pd.isna(r.get('user_name'))
+                ])))
                 sel_manager = st.selectbox("👤 담당자", managers, key="visit_manager_filter")
             
             with col_f3:
@@ -3354,27 +3609,83 @@ if raw_df is not None:
                 from datetime import datetime, timedelta
                 days_map = {"최근 7일": 7, "최근 30일": 30, "최근 90일": 90}
                 cutoff_days = days_map[sel_period]
-                from src import utils
+                # [FIX] Define now_kst using utils helper
                 now_kst = utils.get_now_kst()
-                cutoff_date = now_kst - timedelta(days=cutoff_days)
-                # Ensure cutoff_date is timezone-aware for safe comparison
-                if cutoff_date.tzinfo is None:
-                    cutoff_date = cutoff_date.tz_localize('Asia/Seoul')
+                cutoff_date = (now_kst - timedelta(days=cutoff_days)).replace(tzinfo=None)
                 
-                filtered_reports = [
-                    r for r in filtered_reports 
-                    if pd.to_datetime(r.get('timestamp', '2020-01-01 00:00:00'), utc=True).tz_convert('Asia/Seoul') >= cutoff_date
-                ]
+                temp_reports = []
+                for r in filtered_reports:
+                    try:
+                        ts = pd.to_datetime(r.get('timestamp', '2020-01-01 00:00:00'), errors='coerce')
+                        if hasattr(ts, 'tz_localize'):
+                            ts = ts.tz_localize(None)
+                        if pd.notnull(ts) and ts >= cutoff_date:
+                            temp_reports.append(r)
+                    except:
+                        continue
+                filtered_reports = temp_reports
             
             st.markdown(f"**📋 조회 결과: {len(filtered_reports)}건**")
             st.divider()
             
-            # [IMPROVED] Card-style layout
+            # [NEW] Grid View of Activity History
             if filtered_reports:
+                st.markdown("### 📊 활동 이력 (요약 그리드)")
+                df_reports = pd.DataFrame(filtered_reports)
+                
+                # Automatically extract '사업장명' and '소재지전체주소' from 'record_key' safely
+                def extract_name(k):
+                    parts = str(k).split('_', 1)
+                    return parts[0] if parts else '상호미상'
+                
+                def extract_addr(k):
+                    parts = str(k).split('_', 1)
+                    return parts[1] if len(parts) > 1 else '-'
+                
+                df_reports['사업장명'] = df_reports['record_key'].apply(extract_name)
+                df_reports['소재지전체주소'] = df_reports['record_key'].apply(extract_addr)
+                # Since '도로명전체주소' is not in record_key natively, we merge it from raw_df if possible
+                # However, for simplicity in the history view we can just leave it out or map it if it exists in raw_df.
+                # Let's map it from base_df using record_key
+                road_addr_map = base_df.set_index('record_key')['도로명전체주소'].to_dict() if '도로명전체주소' in base_df.columns else {}
+                df_reports['도로명전체주소'] = df_reports['record_key'].map(road_addr_map).fillna('')
+                
+                # [FIX] Ensure expected columns exist to prevent KeyError on old data
+                expected_cols = ['resulting_status', 'content', 'user_branch', 'user_name', 'timestamp']
+                for col in expected_cols:
+                    if col not in df_reports.columns:
+                        df_reports[col] = ''
+                
+                # Prepare display dataframe (Reordered as requested)
+                df_disp = df_reports[['user_branch', 'user_name', 'resulting_status', 'content', 'timestamp', '사업장명', '도로명전체주소', '소재지전체주소']].rename(columns={
+                    'user_branch': '관리지사',
+                    'user_name': '담당자',
+                    'resulting_status': '변경상태',
+                    'content': '특이사항(활동내용)',
+                    'timestamp': '활동일시'
+                })
+                # Show dataframe
+                st.dataframe(df_disp, use_container_width=True, hide_index=True)
+                
+                st.divider()
+                st.markdown("### 📝 상세 수정 및 미디어 확인")
+                
                 for idx, rep in enumerate(filtered_reports):
-                    # Card header with status badge
+                    # [IMPROVED] Card header with status badge AND Business Name
                     status_badge = rep.get('resulting_status', '')
-                    header = f"**{idx+1}.** 🏢 {rep.get('user_branch', 'N/A')} | 👤 {rep.get('user_name')} | 📅 {rep.get('timestamp')} | 상태: {status_badge}"
+                    raw_key = str(rep.get('record_key', '_'))
+                    parts = raw_key.split('_', 1)
+                    b_name = parts[0] if len(parts) > 0 else '상호미상'
+                    b_addr = parts[1] if len(parts) > 1 else '-'
+                    
+                    # [NEW] Count photos
+                    p_count = 0
+                    for k in ["photo_path1", "photo_path2", "photo_path3", "photo_path"]:
+                        if rep.get(k) and str(rep.get(k)).strip() and str(rep.get(k)).lower() != "nan":
+                            p_count += 1
+                    p_label = f" | 📸 사진 {p_count}장" if p_count > 0 else ""
+                    
+                    header = f"**{idx+1}.** 🏢 {b_name} | {rep.get('user_name')} | {status_badge}{p_label} | 📅 {rep.get('timestamp')[:16]}"
                     
                     with st.expander(header, expanded=False):
                         # Content display
@@ -3382,138 +3693,121 @@ if raw_df is not None:
                         st.info(rep.get('content', ''))
                         
                         # Media display
-                        # 1. Audio
-                        if rep.get("audio_path"):
-                            audio_p = activity_logger.get_media_path(rep.get("audio_path"))
-                            is_url = isinstance(audio_p, str) and audio_p.startswith('http')
-                            if audio_p and (is_url or os.path.exists(audio_p)):
-                                st.markdown("**🎤 음성 녹음:**")
-                                st.audio(audio_p)
+                        media_col1, media_col2 = st.columns(2)
                         
-                        # 2. Photos (Up to 3)
-                        photos = [rep.get("photo_path1"), rep.get("photo_path2"), rep.get("photo_path3")]
-                        # Fallback for legacy data
-                        if not any(photos) and rep.get("photo_path"):
-                            photos[0] = rep.get("photo_path")
+                        with media_col1:
+                            if rep.get("audio_path"):
+                                audio_p = activity_logger.get_media_path(rep.get("audio_path"))
+                                if audio_p and (audio_p.startswith("http") or os.path.exists(audio_p)):
+                                    st.markdown("**🎤 음성 녹음:**")
+                                    st.audio(audio_p)
+                        
+                        with media_col2:
+                            # Show up to 3 photos
+                            photos_to_show = []
+                            for key in ["photo_path1", "photo_path2", "photo_path3", "photo_path"]:
+                                p_path = rep.get(key)
+                                if p_path:
+                                    p_url = activity_logger.get_media_path(p_path)
+                                    if p_url and (p_url.startswith("http") or os.path.exists(p_url)):
+                                        if p_url not in photos_to_show:
+                                            photos_to_show.append(p_url)
                             
-                        valid_photos = []
-                        for p in photos:
-                            if p:
-                                full_p = activity_logger.get_media_path(p)
-                                is_url = isinstance(full_p, str) and full_p.startswith('http')
-                                if full_p and (is_url or os.path.exists(full_p)):
-                                    valid_photos.append(full_p)
-                        
-                        if valid_photos:
-                            st.markdown("**📸 현장 사진:**")
-                            cols = st.columns(len(valid_photos))
-                            for i, p_path in enumerate(valid_photos):
-                                with cols[i]:
-                                    try:
-                                        st.image(p_path, use_container_width=True, caption=f"사진 {i+1}")
-                                    except Exception as e:
-                                        st.caption(f"⚠️ 로드 실패: {p_path}")
-
+                            if photos_to_show:
+                                st.markdown(f"**📸 현장 사진 ({len(photos_to_show)}장):**")
+                                # Use columns for side-by-side if multiple
+                                if len(photos_to_show) > 1:
+                                    p_cols = st.columns(len(photos_to_show))
+                                    for i, p_url in enumerate(photos_to_show):
+                                        with p_cols[i]:
+                                            try:
+                                                st.image(p_url, use_container_width=True)
+                                                if p_url.startswith("http"):
+                                                    # Make link more visible
+                                                    st.markdown(f"[🔗 원본보기]({p_url})")
+                                            except:
+                                                st.caption("⚠️ 이미지 로드 실패")
+                                else:
+                                    st.image(photos_to_show[0], use_container_width=True)
+                                    if photos_to_show[0].startswith("http"):
+                                        st.markdown(f"[🔗 큰 화면(Drive)에서 보기]({photos_to_show[0]})")
                         
                         st.divider()
                         
                         # [NEW] Action buttons in columns
-                        btn_col1, btn_col2, btn_col3 = st.columns(3)
+                        btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
                         
                         with btn_col1:
-                            if st.button("📝 내역 수정", key=f"edit_content_{rep['id']}", use_container_width=True):
-                                st.session_state[f"edit_mode_{rep['id']}"] = True
+                            if st.button("✏️ 내용 수정", key=f"edit_content_{rep.get('id', f'fallback_{idx}')}", use_container_width=True):
+                                st.session_state[f"edit_mode_{rep.get('id', f'fallback_{idx}')}"] = True
                         
                         with btn_col2:
-                            # [REMOVED] Redundant button, merged into 'Edit'
-                            pass
-
+                            if st.button("📸 사진 추가", key=f"add_photo_{rep.get('id', f'fallback_{idx}')}", use_container_width=True):
+                                st.session_state[f"photo_mode_{rep.get('id', f'fallback_{idx}')}"] = True
                         
                         with btn_col3:
-                            if st.button("🔄 상태 변경", key=f"status_change_{rep['id']}", use_container_width=True):
-                                st.session_state[f"status_mode_{rep['id']}"] = True
+                            if st.button("🔄 상태 변경", key=f"status_change_{rep.get('id', f'fallback_{idx}')}", use_container_width=True):
+                                st.session_state[f"status_mode_{rep.get('id', f'fallback_{idx}')}"] = True
+                                
+                        with btn_col4:
+                            # [PERMISSIONS] Only Admin can delete directly. Others get a pre-filled VOC request.
+                            if st.session_state.user_role == 'admin':
+                                if st.button("🗑️ 이력 삭제", key=f"del_hist_{rep.get('id', f'fallback_{idx}')}", type='primary', use_container_width=True):
+                                    succ, msg = activity_logger.delete_visit_report(rep.get('id'))
+                                    if succ:
+                                        st.success("✅ 활동 이력이 삭제되었습니다.")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"❌ 오류: {msg}")
+                            else:
+                                if st.button("🗑️ 삭제요청 (관리자)", key=f"req_del_{rep.get('id', f'fallback_{idx}')}", use_container_width=True, help="삭제 권한이 없습니다. 클릭 시 관리자에게 삭제를 요청할 수 있습니다."):
+                                    st.session_state.active_nav = "🗣️ 관리자에게 요청하기"
+                                    # Pre-fill VOC request details in session state if they exist
+                                    st.session_state.voc_default_subject = f"[요청] 활동 이력 삭제 요청 ({b_name})"
+                                    st.session_state.voc_default_content = f"시스템 ID [{rep.get('id', 'N/A')}] 상호: {b_name} 의 활동 이력 삭제를 요청합니다.\n사유: "
+                                    st.rerun()
                         
-                        # [FEATURE] Edit mode - Content & Photos
-                        if st.session_state.get(f"edit_mode_{rep['id']}", False):
-                            with st.form(key=f"form_edit_{rep['id']}"):
-                                st.caption("📝 방문 내용 및 사진을 수정하세요")
+                        # [FEATURE] Edit mode - Content
+                        if st.session_state.get(f"edit_mode_{rep.get('id', f'fallback_{idx}')}", False):
+                            with st.form(key=f"form_edit_{rep.get('id', f'fallback_{idx}')}"):
+                                st.caption("📝 방문 내용을 수정하세요")
                                 new_text = st.text_area("내용", value=rep.get("content", ""), height=150)
-                                
-                                # [NEW] Manage existing photos
-                                current_photos = [rep.get("photo_path1"), rep.get("photo_path2"), rep.get("photo_path3")]
-                                del_indices = []
-                                
-                                if any(current_photos):
-                                    st.markdown("**📸 기존 사진 삭제**")
-                                    p_cols = st.columns(3)
-                                    for i, p_link in enumerate(current_photos):
-                                        if p_link:
-                                            with p_cols[i]:
-                                                f_p = activity_logger.get_media_path(p_link)
-                                                st.image(f_p, use_container_width=True)
-                                                if st.checkbox("삭제", key=f"del_p_{rep['id']}_{i}"):
-                                                    del_indices.append(i)
-                                
-                                # [NEW] Add new photos
-                                new_photos = st.file_uploader("🆕 새 사진 추가", type=['jpg', 'png', 'jpeg'], key=f"upd_p_{rep['id']}", accept_multiple_files=True)
                                 
                                 col_save, col_cancel = st.columns(2)
                                 if col_save.form_submit_button("💾 저장", use_container_width=True):
-                                    succ, msg = activity_logger.update_visit_report(
-                                        report_id=rep['id'], 
-                                        new_content=new_text, 
-                                        new_photo_files=new_photos,
-                                        deleted_photo_indices=del_indices
-                                    )
+                                    succ, msg = activity_logger.update_visit_report(rep.get('id'), new_text, None)
                                     if succ:
                                         st.success("✅ 수정되었습니다!")
-                                        st.session_state[f"edit_mode_{rep['id']}"] = False
+                                        st.session_state[f"edit_mode_{rep.get('id', f'fallback_{idx}')}"] = False
                                         st.rerun()
                                     else:
                                         st.error(f"❌ 오류: {msg}")
                                 
                                 if col_cancel.form_submit_button("취소", use_container_width=True):
-                                    st.session_state[f"edit_mode_{rep['id']}"] = False
+                                    st.session_state[f"edit_mode_{rep.get('id', f'fallback_{idx}')}"] = False
                                     st.rerun()
-
                         
-
-                        # [REMOVED] Photo mode (Merged into Edit mode)
-                        
-
-                        # [FEATURE] Status change mode
-                        if st.session_state.get(f"status_mode_{rep['id']}", False):
-                            with st.form(key=f"form_status_{rep['id']}"):
-                                st.caption("🔄 활동 상태를 변경하세요")
-                                status_opts = list(activity_logger.ACTIVITY_STATUS_MAP.values())
-                                current_status = rep.get('resulting_status', '')
-                                current_idx = status_opts.index(current_status) if current_status in status_opts else 0
+                        # [FEATURE] Photo mode
+                        if st.session_state.get(f"photo_mode_{rep.get('id', f'fallback_{idx}')}", False):
+                            with st.form(key=f"form_photo_{rep.get('id', f'fallback_{idx}')}"):
+                                st.caption("📸 사진을 추가하세요")
+                                new_photos = st.file_uploader("사진 선택 (최대 3장)", type=['jpg', 'png', 'jpeg'], key=f"uploader_{rep.get('id', f'fallback_{idx}')}", accept_multiple_files=True)
                                 
-                                new_status = st.selectbox("새 상태", status_opts, index=current_idx)
-                                status_note = st.text_area("변경 사유 (선택)", placeholder="상태 변경 사유를 입력하세요")
+                                col_p_save, col_p_cancel = st.columns(2)
+                                if col_p_save.form_submit_button("💾 사진 저장", use_container_width=True):
+                                    if new_photos:
+                                        succ, msg = activity_logger.update_visit_report(rep.get('id'), None, new_photos)
+                                        if succ:
+                                            st.success("✅ 사진이 추가되었습니다!")
+                                            st.session_state[f"photo_mode_{rep.get('id', f'fallback_{idx}')}"] = False
+                                            st.rerun()
+                                        else:
+                                            st.error(f"❌ 오류: {msg}")
+                                    else:
+                                        st.warning("사진을 선택해주세요")
                                 
-                                col_save, col_cancel = st.columns(2)
-                                if col_save.form_submit_button("💾 저장", use_container_width=True):
-                                    # Update activity status
-                                    record_key = rep.get('record_key')
-                                    current_user = st.session_state.get('user_manager_name') or st.session_state.get('user_branch') or '관리자'
-                                    
-                                    activity_logger.save_activity_status(
-                                        record_key=record_key,
-                                        status=new_status,
-                                        notes=status_note or rep.get('content', ''),
-                                        user_name=current_user,
-                                        user_branch=st.session_state.get('user_branch'),
-                                        user_role=st.session_state.get('user_role')
-                                    )
-                                    
-                                    st.success(f"✅ 상태가 '{new_status}'로 변경되었습니다!")
-                                    st.session_state[f"status_mode_{rep['id']}"] = False
-                                    st.cache_data.clear()
-                                    st.rerun()
-                                
-                                if col_cancel.form_submit_button("취소", use_container_width=True):
-                                    st.session_state[f"status_mode_{rep['id']}"] = False
+                                if col_p_cancel.form_submit_button("취소", use_container_width=True):
+                                    st.session_state[f"photo_mode_{rep.get('id', f'fallback_{idx}')}"] = False
                                     st.rerun()
             else:
                 st.info("선택한 조건에 맞는 방문 기록이 없습니다.")
@@ -3524,18 +3818,26 @@ if raw_df is not None:
     if st.session_state.user_role == 'admin' and active_nav == "👁️ 모니터링":
         st.subheader("👁️ 시스템 활동 모니터링")
         
-        # Period selection
+        # [RE-ADDED] Define period_days here to fix NameError
         col_p1, col_p2 = st.columns([3, 1])
         with col_p1:
             period_days = st.selectbox(
                 "📅 조회 기간",
                 [7, 30, 90],
                 format_func=lambda x: f"최근 {x}일",
-                key="monitor_period"
+                key="monitor_period_admin"
             )
         with col_p2:
-            if st.button("🔄 새로고침", use_container_width=True):
-                st.rerun()
+            sync_col1, sync_col2 = st.columns(2)
+            with sync_col1:
+                if st.button("🔄 새로고침", use_container_width=True):
+                    st.rerun()
+            with sync_col2:
+                if st.button("♻️ 시트 동기화", help="구글 시트에서 모든 데이터를 다시 불러옵니다.", use_container_width=True):
+                    with st.spinner("📥 구글 시트 데이터 불러오는 중..."):
+                        activity_logger.pull_from_gsheet()
+                        st.success("동기화 완료!")
+                        st.rerun()
         
         st.divider()
         
@@ -3544,7 +3846,7 @@ if raw_df is not None:
         
         # Top metrics
         st.markdown("### 📊 전체 활동 요약")
-        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+        metric_col1, metric_col2, metric_col3, metric_col4, metric_col5 = st.columns(5)
         
         with metric_col1:
             st.metric("총 활동 수", f"{usage_stats['total_actions']:,}건")
@@ -3555,6 +3857,9 @@ if raw_df is not None:
         with metric_col4:
             visit_reports = activity_logger.get_visit_reports(limit=1000)
             st.metric("방문 리포트", f"{len(visit_reports)}건")
+        with metric_col5:
+            access_logs_summary = activity_logger.get_access_logs(limit=2000, days=period_days)
+            st.metric("접속(로그인)", f"{len(access_logs_summary):,}건")
         
         st.divider()
         
@@ -3657,7 +3962,7 @@ if raw_df is not None:
         st.divider()
         
         # Recent activity timeline
-        st.markdown("### ⏱️ 최근 활동 타임라인")
+        st.markdown("### ⏱️ 최근 상세 활동 (클릭/검색)")
         
         recent_logs = usage_logger.get_usage_logs(days=period_days)
         
@@ -3672,204 +3977,98 @@ if raw_df is not None:
                 st.caption(f"🕐 {timestamp} | 👤 {user_name} ({branch}) - **{action}**")
         else:
             st.info("활동 로그가 없습니다.")
-
-
+            
+        st.divider()
+        
+        # [NEW] Recent Access Timeline
+        st.markdown(f"### 🔑 최근 접속 현황 (최근 {period_days}일 기준)")
+        access_logs = activity_logger.get_access_logs(limit=500, days=period_days)
+        if access_logs:
+            access_df = pd.DataFrame(access_logs)
+            # Ensure columns exist and are in order
+            cols = ['timestamp', 'user_role', 'user_name', 'action']
+            access_df = access_df[[c for c in cols if c in access_df.columns]]
+            access_df.columns = ['일시', '권한', '사용자', '작업']
+            st.dataframe(access_df[::-1], use_container_width=True, hide_index=True, height=400)
+            st.caption(f"💡 위 표는 선택하신 {period_days}일 동안의 기록 중 최근 500건을 표시합니다.")
+        else:
+            st.info(f"최근 {period_days}일 동안의 접속 기록이 없습니다.")
 
     # [TAB] Map & Analysis
     if active_nav == "🗺️ 지도 & 분석":
-        # Log tab access
-        
         with st.expander("🗺️ 조건조회", expanded=True):
-            # Marker for Mobile Visibility Control
             st.markdown('<div id="mobile-filter-marker"></div>', unsafe_allow_html=True)
-            # st.subheader("🗺️ 조건조회")
             
-            # [MOVED] Global Date Range Filter
             st.markdown("##### 🕵️ 기간 조회 (최종수정일 기준)")
             st.caption("전체 탭(지도, 통계, 리스트)에 공통 적용됩니다.")
+            
             g_val = st.date_input(
                 "조회 기간 선택",
                 value=st.session_state.global_date_range,
                 label_visibility="collapsed",
-                key="global_date_range"
+                key="tab_mod_period"
             )
             
-            # [NEW] Validation message for incomplete range
-            if isinstance(g_val, (list, tuple)) and len(g_val) == 1:
-                st.warning("⚠️ 종료일을 선택해주세요.")
+            if isinstance(st.session_state.get('tab_mod_period'), (list, tuple)):
+                if len(st.session_state.tab_mod_period) == 1:
+                    st.warning("⚠️ 종료일을 선택해주세요.")
             st.divider()
 
-            # [MOVED] AI Analysis Block removed from here
-
-
-            # [FEATURE] Condition View Toolbar (Quick Filters)
-            # [UX] Mobile-Friendly Layout: Strict 2x3 Grid
-            
-            # [NEW] Expert Feature: Sales Opportunity Discovery Mode
             st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
-            opp_mode = st.toggle("🚀 영업기회 발굴 모드 (최근 20일 신규/폐업 감지)", value=False, help="최근 20일 이내의 신규 인허가 또는 폐업 리스트만 집중적으로 보여줍니다. 빠른 기회 포착을 위해 사용하세요.")
+            opp_mode = st.toggle("🚀 영업기회 발굴 모드 (최근 15일 신규/폐업 감지)", value=False, help="최근 15일 이내의 신규 인허가 또는 폐업 리스트만 집중적으로 보여줍니다.")
             
             if opp_mode:
-                st.caption("✅ **발굴 모드 활성화됨**: 최근 20일간의 변화(신규/폐업)만 필터링합니다.")
-                # Force flags for logic downstream or calculate mask immediately
-                q_new = False # Ignore manual checkbox visually (or logical override)
-                q_closed = False 
+                st.caption("✅ **발굴 모드 활성화됨**: 최근 15일간의 변화(신규/폐업)만 필터링합니다.")
+                q_new, q_closed = False, False 
             else:
-                # Row 1: Date Filters
-                st.markdown("<div style='margin-bottom: -10px;'></div>", unsafe_allow_html=True) # Spacer
+                st.markdown("<div style='margin-bottom: -10px;'></div>", unsafe_allow_html=True)
                 c_q_r1_1, c_q_r1_2 = st.columns(2)
-                with c_q_r1_1: q_new = st.checkbox("🆕 신규(20일)", value=False, help="최근 20일 이내 개업(인허가)된 건")
-                with c_q_r1_2: q_closed = st.checkbox("🚫 폐업(20일)", value=False, help="최근 20일 이내 폐업된 건")
+                with c_q_r1_1: q_new = st.checkbox("🆕 신규(15일)", value=False, key="chk_q_new")
+                with c_q_r1_2: q_closed = st.checkbox("🚫 폐업(15일)", value=False, key="chk_q_closed")
 
-            # Row 2: Property Filters
             c_q_r2_1, c_q_r2_2, c_q_r2_3 = st.columns(3)
-            with c_q_r2_1: q_hosp = st.checkbox("🏥 병원만", value=False)
-            with c_q_r2_2: q_large = st.checkbox("🏗️ 100평↑", value=False)
-            with c_q_r2_3: q_stopped = st.checkbox("🛑 정지시설", value=False)
-
-            # remove divider to save space
+            with c_q_r2_1: q_hosp = st.checkbox("🏥 병원만", value=False, key="chk_q_hosp")
+            with c_q_r2_2: q_large = st.checkbox("🏗️ 100평↑", value=False, key="chk_q_large")
+            with c_q_r2_3: q_stopped = st.checkbox("🛑 정지시설", value=False, key="chk_q_stopped")
             
-            # [FIX] CRITICAL: Use base_df (filtered by Sidebar) instead of raw df
-            # This ensures Map respects Branch/Manager/Address filters from Sidebar.
+            cutoff_15d = GLOBAL_MAX_DATE - pd.Timedelta(days=15)
             map_df_base = base_df.dropna(subset=['lat', 'lon']).copy()
-
-            # [FEATURE] Apply Quick Filters (Pre-Filtering for Dynamic Dropdowns)
-            # 1. Date Filters (OR Logic: New OR Closed)
-            date_mask = pd.Series([False] * len(map_df_base), index=map_df_base.index)
-            has_date_filter = False
-
-            if opp_mode:
-                # [LOGIC] Opportunity Mode: 15 Days New OR Closed
-                has_date_filter = True
                 
-                # New (15 Days)
-                if '인허가일자' in map_df_base.columns:
-                     # [FIX] Ensure they are tz-aware (KST) if already processed by data_loader
-                     # But pd.to_datetime might make them naive if source was naive. 
-                     # So we force localize to KST.
-                     series = pd.to_datetime(map_df_base['인허가일자'], errors='coerce')
-                     if series.dt.tz is None: series = series.dt.tz_localize('Asia/Seoul')
-                     map_df_base['인허가일자'] = series
-                     cutoff_opp = utils.get_now_kst() - pd.Timedelta(days=20)
-                     date_mask = date_mask | (map_df_base['인허가일자'] >= cutoff_opp)
-                     
-                # Closed (15 Days)
-                if '폐업일자' in map_df_base.columns:
-                     series = pd.to_datetime(map_df_base['폐업일자'], errors='coerce')
-                     if series.dt.tz is None: series = series.dt.tz_localize('Asia/Seoul')
-                     map_df_base['폐업일자'] = series
-                     cutoff_opp = utils.get_now_kst() - pd.Timedelta(days=20)
-                     date_mask = date_mask | (map_df_base['폐업일자'] >= cutoff_opp)
-                     
-            else:
-                # Standard Logic
-                if q_new:
-                     has_date_filter = True
-                     if '인허가일자' in map_df_base.columns:
-                         series = pd.to_datetime(map_df_base['인허가일자'], errors='coerce')
-                         if series.dt.tz is None: series = series.dt.tz_localize('Asia/Seoul')
-                         map_df_base['인허가일자'] = series
-                         # [FIX] Changed to 20 days
-                         cutoff_new = utils.get_now_kst() - pd.Timedelta(days=20)
-                         
-                         # [LOGIC] "New" implies Sales Opportunity. Exclude "Closed" status to remove noise.
-                         # User Complaint: "New selected but Closed appears" -> Filter out '폐업' for New items.
-                         new_cond = (map_df_base['인허가일자'] >= cutoff_new)
-                         if '영업상태명' in map_df_base.columns:
-                             new_cond = new_cond & (map_df_base['영업상태명'] != '폐업')
-                             
-                         date_mask = date_mask | new_cond
-     
-                if q_closed:
-                     has_date_filter = True
-                     if '폐업일자' in map_df_base.columns:
-                         series = pd.to_datetime(map_df_base['폐업일자'], errors='coerce')
-                         if series.dt.tz is None: series = series.dt.tz_localize('Asia/Seoul')
-                         map_df_base['폐업일자'] = series
-                         # [FIX] Changed to 20 days
-                         cutoff_closed = utils.get_now_kst() - pd.Timedelta(days=20)
-                         date_mask = date_mask | (map_df_base['폐업일자'] >= cutoff_closed)
-
-            if has_date_filter:
-                map_df_base = map_df_base[date_mask]
-
-            # 2. Property Filters (AND Logic)
-            if q_hosp:
-                 if '업태구분명' in map_df_base.columns:
-                     map_df_base = map_df_base[map_df_base['업태구분명'].astype(str).str.contains('병원|의원', na=False)]
-
-            if q_large:
-                 if '소재지면적' in map_df_base.columns:
-                     map_df_base['소재지면적_ad'] = pd.to_numeric(map_df_base['소재지면적'], errors='coerce').fillna(0)
-                     map_df_base = map_df_base[map_df_base['소재지면적_ad'] >= 330.0]
-
-            if q_stopped:
-                 import glob
-                 fixed_files = glob.glob("data/*0224*.xlsx")
-                 if fixed_files:
-                      fixed_file_p = fixed_files[0]
-                      st.toast(f"📍 정지 데이터 로드 중: {os.path.basename(fixed_file_p)}", icon="ℹ️")
-                      f_df, _, _, _ = data_loader.load_fixed_coordinates_data(fixed_file_p)
-                      if f_df is not None:
-                           status_columns = [c for c in f_df.columns if any(p in c for p in ['상태', '정지', '영업'])]
-                           f_mask = pd.Series([False] * len(f_df), index=f_df.index)
-                           for c in status_columns:
-                                f_mask = f_mask | f_df[c].astype(str).str.contains('정지|일시정지|해지', na=False)
-                           map_df_base = f_df[f_mask].dropna(subset=['lat', 'lon']).copy()
-                           st.toast(f"✅ 정지 시설 {len(map_df_base)}곳 로드 완료", icon="🛑")
-                      else:
-                           st.error("정지 데이터를 로드할 수 없습니다.")
-                 else:
-                      st.warning("⚠️ 정지 데이터 파일을 찾을 수 없습니다.")
-
-            # Reduced spacing here
-
-            # [UX] Mobile-Friendly Layout: 2x2 Grid for Selectboxes
-            c_f_r1_1, c_f_r1_2 = st.columns(2)
-
-            # [Dynamic Dropdowns]
-            # Logic: Type Selection should filter Region/Manager lists.
-            # We need to peek at the current 'map_biz_type' from session state if available
-            current_map_type = st.session_state.get('map_biz_type', "전체")
-
-            # [REMOVED] Local Branch/Manager Dropdowns (User Request)
-            # Defaulting to "전체" to maintain logic flow
-            sel_map_region = "전체"
-            sel_map_sales = "전체"
-            
-            # Placeholder for layout if needed, or just remove columns usage
-            # Filter base for options based on Type (if selected)
-            options_source_df = map_df_base.copy()
-            if current_map_type != "전체" and '업태구분명' in options_source_df.columns:
-                options_source_df = options_source_df[options_source_df['업태구분명'] == current_map_type]
-
-            # Re-using columns for Type logic or just skipping
-            # with c_f_r1_1: ... removed
-            # with c_f_r1_2: ... removed
+            if opp_mode:
+                if '인허가일자' in map_df_base.columns and '폐업일자' in map_df_base.columns:
+                    mask = (map_df_base['인허가일자'] >= cutoff_15d) | (map_df_base['폐업일자'] >= cutoff_15d)
+                    map_df_base = map_df_base[mask.fillna(False)]
+            elif q_new or q_closed:
+                mask = pd.Series(False, index=map_df_base.index)
+                if q_new: mask = mask | (map_df_base['인허가일자'] >= cutoff_15d).fillna(False)
+                if q_closed: mask = mask | (map_df_base['폐업일자'] >= cutoff_15d).fillna(False)
+                map_df_base = map_df_base[mask]
 
             c_f_r2_1, c_f_r2_2 = st.columns(2)
             with c_f_r2_1:
-                # Business Type Options - Should these be filtered by Region?
-                # User asked for "Type selection -> Dynamic".
-                # Usually, Type list comes from the Quick-filtered Base.
+                # 1. Region selection
+                branches = ["전체"] + sorted([str(b) for b in map_df_base['관리지사'].dropna().unique() if b])
+                sel_map_region = st.selectbox("관리지사/지역", branches, key="map_region_filter")
+                
+                # 2. Dynamic Business Type selection
                 map_type_col = '업태구분명' if '업태구분명' in map_df_base.columns else map_df_base.columns[0]
-                try:
-                    # Type options come from the filters BEFORE Type selection (to allow changing type)
-                    # But should reflect Region selection? "Dynamic" implies full cross-filtering.
-                    # Let's try to filter Type options by Region if Region is selected.
-                    type_source_df = map_df_base
-                    if sel_map_region != "전체":
-                        type_source_df = type_source_df[type_source_df['관리지사'] == sel_map_region]
-
-                    map_type_opts = ["전체"] + sorted(list(type_source_df[map_type_col].dropna().unique()))
-                except:
-                    map_type_opts = ["전체"]
+                type_source_df = map_df_base
+                if sel_map_region != "전체":
+                    type_source_df = type_source_df[type_source_df['관리지사'] == sel_map_region]
+                map_type_opts = ["전체"] + sorted(list(type_source_df[map_type_col].dropna().unique()))
                 sel_map_type = st.selectbox("업종(업태)", map_type_opts, key="map_biz_type")
 
             with c_f_r2_2:
-                 # Status Dropdown (Public)
-                 map_status_opts = ["전체", "영업/정상", "폐업"]
-                 sel_map_status = st.selectbox("영업상태 (공공)", map_status_opts, key="map_status_filter")
+                # 3. Dynamic Manager selection (SP담당) - [RESTORED]
+                mgr_source_df = map_df_base
+                if sel_map_region != "전체":
+                    mgr_source_df = mgr_source_df[mgr_source_df['관리지사'] == sel_map_region]
+                managers = ["전체"] + sorted([str(m) for m in mgr_source_df['SP담당'].dropna().unique() if m])
+                sel_map_sales = st.selectbox("영업담당(SP)", managers, key="map_sales_filter")
+                
+                # 4. Global Sales Status selection
+                map_status_opts = ["전체", "영업/정상", "폐업"]
+                sel_map_status = st.selectbox("영업상태 (공공)", map_status_opts, key="map_status_filter")
             
             # [FEATURE] Activity Status Filter (Internal)
             st.markdown("##### 📍 활동 상태별 필터")
@@ -3890,10 +4089,14 @@ if raw_df is not None:
 
             # Final Filtering
             map_df = map_df_base.copy()
-            if sel_map_region != "전체": map_df = map_df[map_df['관리지사'] == sel_map_region]
-            if sel_map_sales != "전체": map_df = map_df[map_df['SP담당'] == sel_map_sales]
-            if sel_map_type != "전체": map_df = map_df[map_df['업태구분명'] == sel_map_type]
-            if sel_map_status != "전체": map_df = map_df[map_df['영업상태명'] == sel_map_status]
+            # [FIX] Robust matching for Map Filters
+            if sel_map_region != "전체": map_df = map_df[map_df['관리지사'].str.contains(str(sel_map_region).strip(), na=False)]
+            if sel_map_sales != "전체": map_df = map_df[map_df['SP담당'].str.contains(str(sel_map_sales).strip(), na=False)]
+            if sel_map_type != "전체": map_df = map_df[map_df['업태구분명'].str.contains(str(sel_map_type).strip(), na=False)]
+            if sel_map_status != "전체": 
+                # Relaxed matching for status
+                status_query = '영업|정상' if '영업' in sel_map_status else sel_map_status
+                map_df = map_df[map_df['영업상태명'].str.contains(status_query, na=False)]
             
             # Apply activity status filter
             if sel_act_statuses:
@@ -3909,6 +4112,60 @@ if raw_df is not None:
                 map_df['record_key'] = map_df.apply(lambda row: utils.generate_record_key(row.get('사업장명'), row.get('소재지전체주소')), axis=1)
 
             st.markdown(f"**📍 조회된 업체**: {len(map_df):,} 개")
+            
+            # [DIAGNOSTIC] Show map data health
+            with st.expander("🛠 지도 데이터 진단 정보", expanded=False):
+                st.write(f"📊 **전체 필터된 데이터**: {len(map_df):,}건")
+                
+                # Check column presence
+                cols = list(map_df.columns) if not map_df.empty else list(map_df_base.columns)
+                has_lat = 'lat' in cols
+                has_lon = 'lon' in cols
+                
+                if has_lat and has_lon:
+                    st.success("✅ 'lat', 'lon' 좌표 컬럼이 확인되었습니다.")
+                    valid_coords_count = len(map_df_base.dropna(subset=['lat', 'lon']))
+                    st.write(f"📍 **유효한 좌표 보유 (전체)**: {valid_coords_count:,}건")
+                    
+                    # [DEBUG] Show Coordinate Library Status
+                    from src.utils import HAS_PYPROJ
+                    if HAS_PYPROJ:
+                        st.info("🌐 좌표 변환 라이브러리(pyproj)가 정상 작동 중입니다.")
+                    else:
+                        st.warning("⚠️ 좌표 변환 라이브러리(pyproj)를 찾을 수 없습니다. 원본 좌표가 위경도가 아닐 경우 표시되지 않습니다.")
+                    
+                    if not map_df.empty:
+                        valid_filtered_count = len(map_df.dropna(subset=['lat', 'lon']))
+                        st.write(f"🎯 **현재 필터링된 유효 좌표**: {valid_filtered_count:,}건 / {len(map_df):,}건")
+                    
+                    if valid_coords_count == 0 and len(map_df_base) > 0:
+                        st.error("❌ 데이터에 위경도 값이 모두 비어있습니다. '좌표정보(X/Y)' 컬럼 값을 확인해야 합니다.")
+                        
+                        # Show captured errors from data_loader
+                        if hasattr(map_df_base, 'attrs') and 'diagnostic_errors' in map_df_base.attrs:
+                            st.write("📂 **작업 중 발생한 오류**:")
+                            for err in map_df_base.attrs['diagnostic_errors']:
+                                st.code(err)
+                        
+                        # Show raw coordinate samples
+                        raw_x = [c for c in cols if '좌표' in c and 'X' in c]
+                        raw_y = [c for c in cols if '좌표' in c and 'Y' in c]
+                        if raw_x and raw_y:
+                            try:
+                                sample_x = map_df_base[raw_x[0]].dropna().iloc[0]
+                                sample_y = map_df_base[raw_y[0]].dropna().iloc[0]
+                                st.write(f"📊 **원본 좌표 샘플**: X={sample_x}, Y={sample_y}")
+                            except:
+                                st.write("📊 원본 좌표 컬럼은 있으나 샘플 데이터를 추출할 수 없습니다.")
+                else:
+                    st.error("❌ 'lat' 또는 'lon' 컬럼이 누락되었습니다. 데이터 로딩 로직을 점검해야 합니다.")
+                
+                st.write(f"🔎 **사용 중인 컬럼**: `{', '.join(cols[:10])}...` ({len(cols)}개)")
+                
+                if not map_df.empty:
+                    st.write(f"🏷 **데이터 샘플 (상태명)**: {map_df['영업상태명'].unique().tolist() if '영업상태명' in map_df.columns else 'N/A'}")
+                else:
+                    st.warning("⚠️ 현재 필터 조건에 맞는 데이터가 0건입니다.")
 
             # [FEATURE] Visible Filter Summary for Verification
             filter_summary = []
@@ -3929,12 +4186,13 @@ if raw_df is not None:
         
         # [NEW] Expert Feat 1: AI Scoring
         if not map_df.empty:
-            # [FEATURE GATE] Pro Tier Only: AI Scoring
-            if auth_manager.is_pro_user():
-                map_df = calculate_ai_scores(map_df)
-            else:
-                map_df['AI_Score'] = 0
-                map_df['AI_Comment'] = "⭐ Pro 업그레이드 시 활성화"
+            # [LOG] AI Scoring Trigger
+            usage_logger.log_usage(st.session_state.get('user_role', 'user'), st.session_state.get('user_name', 'unknown'), st.session_state.get('user_branch', ''), 'ai_expert_scoring', {'record_count': len(map_df)})
+            map_df = calculate_ai_scores(map_df)
+            # [LOG] Log AI Scoring Action once per session or limited
+            if 'ai_scored_this_load' not in st.session_state:
+                usage_logger.log_usage(st.session_state.get('user_role'), st.session_state.get('user_manager_name', 'System'), st.session_state.get('user_branch', ''), 'ai_scoring', {'count': len(map_df)})
+                st.session_state.ai_scored_this_load = True
             
         # [NEW] Expert Feat 2: Heatmap Toggle
         use_heatmap = st.checkbox("🌡️ 상권 밀집도(히트맵) 보기", value=False)
@@ -3961,77 +4219,99 @@ if raw_df is not None:
     if active_nav == "📈 상세통계":
         st.subheader("📈 다차원 상세 분석")
         
-        # [FEATURE] 20-Day Daily Trend Chart (Stacked)
-        st.markdown("##### 📅 최근 20일 신규/폐업 추이 (누적)")
+        # [FEATURE] 15-Day Daily Trend Chart
+        st.markdown("##### 📅 최근 15일 영업/폐업 추이")
         try:
             # 1. Prepare Data
-            trend_end_date = utils.get_now_kst().normalize()
-            trend_start_date = trend_end_date - pd.Timedelta(days=19) # 20 days inclusive
+            trend_end_date = GLOBAL_MAX_DATE
+            trend_start_date = trend_end_date - pd.Timedelta(days=14) # 15 days inclusive: [Today-14, Today]
+            
+            # Create a continuous date range for the last 15 days
+            date_range = pd.date_range(start=trend_start_date, end=trend_end_date, freq='D')
+            trend_base_df = pd.DataFrame({'date': date_range})
+            trend_base_df['date_str'] = trend_base_df['date'].dt.strftime('%m-%d')
             
             trend_data = []
             
-            # Trend Series (Use Updated Date as it is more complete for Mar 6-17)
+            # Open (In-sync / Newly appeared)
             if '최종수정시점' in base_df.columns:
-                 series_trend = base_df['최종수정시점']
-                 if not pd.api.types.is_datetime64_any_dtype(series_trend):
-                     series_trend = pd.to_datetime(series_trend, errors='coerce')
-                 if series_trend.dt.tz is None:
-                     series_trend = series_trend.dt.tz_localize('Asia/Seoul')
+                 # [FIX] Ensure datetime type before filtering to prevent visualization drops
+                 base_df['최종수정시점'] = pd.to_datetime(base_df['최종수정시점'], errors='coerce')
                  
-                 # 1. Filter for New (using status)
-                 mask_new = base_df['영업상태명'].str.contains('영업|정상', na=False)
-                 new_recs = base_df[
-                     mask_new & 
-                     (series_trend >= trend_start_date) & 
-                     (series_trend <= trend_end_date + pd.Timedelta(days=1)) 
+                 # [FIX] Use Update Date (최종수정시점) instead of License Date (인허가일자) 
+                 # to visualize the data sync volume (e.g. 10k records in April)
+                 open_15d = base_df[
+                     (base_df['최종수정시점'] >= trend_start_date) & 
+                     (base_df['최종수정시점'] <= trend_end_date + pd.Timedelta(days=1)) 
                  ].copy()
-                 if not new_recs.empty:
-                     daily_new = new_recs.groupby(series_trend[new_recs.index].dt.date).size().reset_index(name='count')
-                     daily_new['status'] = '신규'
-                     daily_new.columns = ['date', 'count', 'status']
-                     trend_data.append(daily_new)
                  
-                 # 2. Filter for Closed
-                 mask_closed = ~mask_new
-                 close_recs = base_df[
-                     mask_closed &
-                     (series_trend >= trend_start_date) & 
-                     (series_trend <= trend_end_date + pd.Timedelta(days=1))
+                 open_counts = trend_base_df[['date', 'date_str']].copy()
+                 open_counts['status'] = '영업'
+                 open_counts['count'] = 0
+                 
+                 if not open_15d.empty:
+                     # Calculate counts based on daily update/sync time
+                     daily_open = open_15d['최종수정시점'].dt.normalize().value_counts().reset_index()
+                     daily_open.columns = ['date', 'actual_count']
+                     open_counts = pd.merge(open_counts, daily_open, on='date', how='left')
+                     open_counts['count'] = open_counts['actual_count'].fillna(0).astype(int)
+                     open_counts = open_counts.drop(columns=['actual_count'])
+                 
+                 trend_data.append(open_counts)
+            
+            # Closed
+            if '폐업일자' in base_df.columns:
+                 close_15d = base_df[
+                     (base_df['폐업일자'] >= trend_start_date) & 
+                     (base_df['폐업일자'] <= trend_end_date + pd.Timedelta(days=1))
                  ].copy()
-                 if not close_recs.empty:
-                     daily_close = close_recs.groupby(series_trend[close_recs.index].dt.date).size().reset_index(name='count')
-                     daily_close['status'] = '폐업'
-                     daily_close.columns = ['date', 'count', 'status']
-                     trend_data.append(daily_close)
+                 
+                 close_counts = trend_base_df[['date', 'date_str']].copy()
+                 close_counts['status'] = '폐업'
+                 close_counts['count'] = 0
+                 
+                 if not close_15d.empty:
+                     # Calculate counts and merge
+                     daily_close = close_15d['폐업일자'].dt.normalize().value_counts().reset_index()
+                     daily_close.columns = ['date', 'actual_count']
+                     close_counts = pd.merge(close_counts, daily_close, on='date', how='left')
+                     close_counts['count'] = close_counts['actual_count'].fillna(0).astype(int)
+                     close_counts = close_counts.drop(columns=['actual_count'])
+                     
+                 trend_data.append(close_counts)
             
             if trend_data:
                 trend_df = pd.concat(trend_data, ignore_index=True)
                 trend_df['date'] = pd.to_datetime(trend_df['date'])
+                
+                # [FIX] Sort by actual datetime, then map to strings
+                trend_df = trend_df.sort_values('date')
                 trend_df['date_str'] = trend_df['date'].dt.strftime('%m-%d')
                 
-                sorted_date_strs = sorted(trend_df['date'].unique())
-                sorted_date_strs = [pd.Timestamp(d).strftime('%m-%d') for d in sorted_date_strs]
+                # [FIX] Explicitly define sort order using a list for Ordinal Axis
+                sorted_dates = sorted(trend_df['date'].unique())
+                sorted_date_strs = [pd.Timestamp(d).strftime('%m-%d') for d in sorted_dates]
 
-                # 2. Visualize (Stacked Bar Chart)
+                # 2. Visualize
                 trend_chart = alt.Chart(trend_df).mark_bar().encode(
-                    x=alt.X('date_str:O', sort=sorted_date_strs, axis=alt.Axis(title='날짜')), 
-                    y=alt.Y('count:Q', title='건수', stack=True), # Explicitly stack
+                    x=alt.X('date_str:O', sort=sorted_date_strs, axis=alt.Axis(title='날짜 (2026)', labelAngle=-45)), 
+                    y=alt.Y('count:Q', title='건수'),
                     color=alt.Color('status:N', 
-                                    scale=alt.Scale(domain=['신규', '폐업'], range=['#AED581', '#EF9A9A']), 
+                                    scale=alt.Scale(domain=['영업', '폐업'], range=['#4CAF50', '#FFCDD2']), 
                                     legend=alt.Legend(title="구분")),
                     tooltip=['date_str', 'status', 'count']
                 ).properties(
-                    height=300
+                    height=200
                 )
                 
-                # Add total counts on top if possible, or just individual labels
+                # Add text labels on bars
                 text = trend_chart.mark_text(dy=-5, fontSize=10).encode(
                     text='count:Q'
                 )
                 
                 st.altair_chart(trend_chart + text, use_container_width=True)
             else:
-                st.info("최근 20일간 변동 데이터가 없습니다.")
+                st.info("최근 15일간 변동 데이터가 없습니다.")
                 
         except Exception as e:
             st.error(f"차트 생성 중 오류가 발생했습니다: {e}")
@@ -4039,30 +4319,22 @@ if raw_df is not None:
         st.markdown("---")
         
         from src import utils
-        now = utils.get_now_kst()
-        # [FIX] Use '최종수정시점' as best available date for statistics
-        effective_date_col = '최종수정시점' if '최종수정시점' in df.columns else '인허가일자'
-        
-        if effective_date_col in df.columns:
-            valid_dates = df.dropna(subset=[effective_date_col]).copy()
+        now = utils.get_now_kst().replace(tzinfo=None)
+        # [FIX] Use globally standardized '인허가일자'
+        if '인허가일자' in df.columns:
+            # We already neutralized tzone at the top, just need to ensure 'now' is also naive
+            valid_dates = df.dropna(subset=['인허가일자']).copy()
             if not valid_dates.empty:
-                if not pd.api.types.is_datetime64_any_dtype(valid_dates[effective_date_col]):
-                     valid_dates[effective_date_col] = pd.to_datetime(valid_dates[effective_date_col], errors='coerce')
-                
-                valid_dates['business_years'] = (now - valid_dates[effective_date_col]).dt.days / 365.25
+                # Calculate avg age using standardized naive datetimes
+                valid_dates['business_years'] = (now - valid_dates['인허가일자']).dt.days / 365.25
                 avg_age = valid_dates['business_years'].mean()
             else:
                 avg_age = 0
         else:
             avg_age = 0
             
-        if '평수' not in df.columns:
-             if '소재지면적' in df.columns:
-                 df['평수'] = pd.to_numeric(df['소재지면적'], errors='coerce').fillna(0) / 3.3058
-             else:
-                 df['평수'] = 0
-        
-        avg_area = df['평수'].mean()
+        # [FIX] '평수' is already calculated globally
+        avg_area = df['평수'].mean() if '평수' in df.columns else 0
         
         def extract_dong(addr):
              if pd.isna(addr): return "미상"
@@ -4109,7 +4381,8 @@ if raw_df is not None:
                 
                 # [MODIFIED] Full-width Stacked Chart
                 st.markdown("**지사별 영업상태 누적 (Stacked)**")
-                df_stacked = df[df['영업상태명'].isin(['영업/정상', '폐업'])]
+                # [FIX] Robust match for Stacked Chart
+                df_stacked = df[df['영업상태명'].str.contains('영업|정상|폐업', na=False)]
                 
                 bar_base = alt.Chart(df_stacked).encode(
                     x=alt.X("관리지사", sort=GLOBAL_BRANCH_ORDER, title=None),
@@ -4200,7 +4473,8 @@ if raw_df is not None:
                     row = page_df.iloc[i + j]
                     
                     with cols[j]:
-                        status_cls = "status-open" if row['영업상태명'] == '영업/정상' else "status-closed"
+                        # [FIX] Robust class assignment
+                        status_cls = "status-open" if any(p in str(row['영업상태명']) for p in ['영업', '정상']) else "status-closed"
                         tel = row['소재지전화'] if pd.notna(row['소재지전화']) else ""
                         
                         def fmt_date(d):
@@ -4219,7 +4493,7 @@ if raw_df is not None:
                             <div class="status-badge {status_cls}">{row['영업상태명']}</div>
                             <div class="card-title-grid" title="{row['사업장명']}">{row['사업장명']}</div>
                             <div class="card-meta-grid">
-                                {row['업태구분명']} | {row['평수']}평<br>
+                                {row.get('업태구분명', '-')} | {row.get('평수', '-')}평<br>
                                 {row['관리지사']} ({row['SP담당']})<br>
                                 <span style="color:#7C4DFF">🔄 {last_modified or '-'}</span> | 
                                 <span style="color:#1565C0">✨ {permit_date or '-'}</span>
@@ -4261,33 +4535,34 @@ if raw_df is not None:
         except Exception as e:
             status_data = {}
 
-        # Add activity status and notes from storage (Optimized)
-        grid_df['record_key'] = grid_df.apply(lambda row: activity_logger.get_record_key(row), axis=1)
-        
-        # Helper to safely get data from loaded dict
-        def get_status_val(k, field):
-            return status_data.get(k, {}).get(field, '')
+        # [OPTIMIZATION] Vectorized Mapping for Activity Status
+        if 'record_key' not in grid_df.columns:
+            grid_df['record_key'] = grid_df.apply(lambda row: activity_logger.get_record_key(row), axis=1)
 
-        grid_df['활동진행상태'] = grid_df['record_key'].apply(lambda k: get_status_val(k, '활동진행상태')).astype(str)
-        grid_df['특이사항'] = grid_df['record_key'].apply(lambda k: get_status_val(k, '특이사항')).astype(str)
-        grid_df['상태변경일시'] = grid_df['record_key'].apply(lambda k: get_status_val(k, '변경일시')).astype(str)
-        grid_df['상태변경자'] = grid_df['record_key'].apply(lambda k: get_status_val(k, '변경자')).astype(str)
+        status_map = {k: v.get('활동진행상태', '') for k, v in status_data.items() if isinstance(v, dict)}
+        note_map = {k: v.get('특이사항', '') for k, v in status_data.items() if isinstance(v, dict)}
+        date_map = {k: v.get('변경일시', '') for k, v in status_data.items() if isinstance(v, dict)}
+        user_map = {k: v.get('변경자', '') for k, v in status_data.items() if isinstance(v, dict)}
+
+        grid_df['활동진행상태'] = grid_df['record_key'].map(status_map).fillna('').astype(str)
+        grid_df['특이사항'] = grid_df['record_key'].map(note_map).fillna('').astype(str)
+        grid_df['상태변경일시'] = grid_df['record_key'].map(date_map).fillna('').astype(str)
+        grid_df['상태변경자'] = grid_df['record_key'].map(user_map).fillna('').astype(str)
         
         # [DEBUG] Key Comparison - Removed by user request
         # with st.expander("🕵️ 데이터 키 정밀 분석 (Debug)", expanded=True):
         #     pass
         
-        if '인허가일자' in grid_df.columns:
-            grid_df['인허가일자'] = grid_df['인허가일자'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else "")
-            
-        if '폐업일자' in grid_df.columns:
-            grid_df['폐업일자'] = grid_df['폐업일자'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else "")
-        
-        if '최종수정시점' in grid_df.columns:
-            grid_df['최종수정시점'] = grid_df['최종수정시점'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else "")
+        # [OPTIMIZATION] Vectorized Date Formatting
+        for dt_col in ['인허가일자', '폐업일자', '최종수정시점']:
+            if dt_col in grid_df.columns:
+                grid_df[dt_col] = pd.to_datetime(grid_df[dt_col], errors='coerce').dt.strftime('%Y-%m-%d').fillna("")
 
 
-        grid_df = grid_df.sort_values(by=['관리지사', 'SP담당', '업태구분명'])
+        # [FIX] Defensive sorting to prevent KeyError if some columns are missing
+        sort_cols = [c for c in ['관리지사', 'SP담당', '업태구분명'] if c in grid_df.columns]
+        if sort_cols:
+            grid_df = grid_df.sort_values(by=sort_cols)
         
         # [LAYOUT] Data Grid & VOC
         
@@ -4298,7 +4573,7 @@ if raw_df is not None:
         display_cols = [
             '활동진행상태', # Moved to first position
             '관리지사', 'SP담당', '업태구분명', '사업장명', 
-            '소재지전체주소', '소재지전화', '평수', 
+            '도로명전체주소', '소재지전체주소', '소재지전화', '평수', 
             '특이사항', '상태변경일시', '상태변경자',
             '최종수정시점', '인허가일자', '폐업일자', 'record_key'
         ]
@@ -4460,8 +4735,11 @@ if raw_df is not None:
                             "branch": st.session_state.get('user_branch', '')
                         }
                         
+                        # [FIX] Type safety: Ensure raw_status is a string before 'in' checks
+                        raw_status_str = str(raw_status) if pd.notna(raw_status) else ""
+                        
                         # 2. Check if this is a Visit Registration
-                        if "방문" in raw_status:
+                        if "방문" in raw_status_str:
                              # Register Visit (Atomic: Report + Status + History)
                              sys_note = f"[시스템 자동] 데이터 그리드에서 '방문' 상태로 변경됨. (특이사항: {row['특이사항']})"
                              activity_logger.register_visit(
@@ -4472,19 +4750,19 @@ if raw_df is not None:
                                  forced_status=raw_status # Persist the exact status string
                              )
                         # [NEW] Check if this is an Interest Registration
-                        elif "관심" in raw_status:
-                             # Register Interest (Status + Interest Log)
-                             # 1. Status Update (Now also creates a visit report entry internally)
-                             activity_logger.save_activity_status(
-                                row['record_key'],
-                                raw_status,
-                                row['특이사항'],
-                                current_user,
-                                user_branch=st.session_state.get('user_branch'),
-                                user_role=st.session_state.get('user_role')
-                            )
+                        elif "관심" in raw_status_str:
+                             # Register Interest (Status + Interest Log + Visit History Draft)
+                             sys_note = f"[시스템 자동] 데이터 그리드에서 '관심' 상태로 변경됨. (특이사항: {row['특이사항']})"
+                             activity_logger.register_visit(
+                                 row['record_key'], 
+                                 sys_note, 
+                                 None, None, # No media
+                                 u_info,
+                                 forced_status=raw_status # Persist the exact status string
+                             )
                         else:
-                             # Just Status Update (Atomic: Status + History + Report)
+                             # Just Status Update (Atomic: Status + History)
+                             # [NEW] Report generation now handled internally by activity_logger.py
                              activity_logger.save_activity_status(
                                 row['record_key'],
                                 raw_status,
@@ -4493,7 +4771,6 @@ if raw_df is not None:
                                 user_branch=st.session_state.get('user_branch'),
                                 user_role=st.session_state.get('user_role')
                             )
-
                         
                         saved_count += 1
                 
@@ -4508,14 +4785,7 @@ if raw_df is not None:
                     st.info("변경된 항목이 없습니다.")
         
         with col2:
-            # [FEATURE GATE] Pro Tier Only: Excel/CSV Download
-            if auth_manager.is_pro_user():
-                st.download_button("📥 CSV 다운로드", df_display.to_csv(index=False).encode('utf-8-sig'), "영업기회_처리결과.csv", "text/csv", use_container_width=True)
-            else:
-                if st.button("📥 CSV 다운로드 (Pro 전용)", use_container_width=True):
-                    st.warning("⚠️ 데이터 내보내기는 **Pro 요금제**에서만 지원됩니다.")
-                    st.session_state.show_pricing = True
-                    st.rerun()
+            st.download_button("📥 CSV 다운로드", df_display.to_csv(index=False).encode('utf-8-sig'), "영업기회_처리결과.csv", "text/csv", use_container_width=True)
     
     # [TAB] VOC Request (Admin + Users)
     # [FIX] Allow Admin to see the tab content (as View Mode)
@@ -4575,8 +4845,12 @@ if raw_df is not None:
             st.info("건의사항, 오류 제보, 기능 요청 등을 관리자에게 전달할 수 있습니다.")
             
             with st.form("voc_request_form"):
-                voc_subj = st.text_input("📝 제목", placeholder="요청 제목을 입력하세요")
-                voc_cont = st.text_area("📄 내용", placeholder="상세 내용을 입력하세요...", height=200)
+                # [FEATURE] Pre-fill values if navigating from Activity History deletion request
+                init_subj = st.session_state.pop("voc_default_subject", "")
+                init_cont = st.session_state.pop("voc_default_content", "")
+                
+                voc_subj = st.text_input("📝 제목", value=init_subj, placeholder="요청 제목을 입력하세요")
+                voc_cont = st.text_area("📄 내용", value=init_cont, placeholder="상세 내용을 입력하세요...", height=200)
                 voc_pri = st.select_slider("⚠️ 중요도", options=["Low", "Normal", "High"], value="Normal")
                 
                 col_submit, col_reset = st.columns([1, 1])
@@ -4587,10 +4861,13 @@ if raw_df is not None:
                 
                 if submitted:
                     if voc_subj and voc_cont:
-                        u_name = st.session_state.user_manager_name or st.session_state.user_branch or "Unknown"
+                        u_name = st.session_state.get('user_manager_name') or st.session_state.get('user_branch') or "Unknown"
                         u_region = st.session_state.user_branch or "Unknown"
                         if voc_manager.add_voc_request(st.session_state.user_role, u_name, u_region, voc_subj, voc_cont, voc_pri):
                             st.success("✅ 요청이 성공적으로 접수되었습니다. 관리자가 확인 후 답변드리겠습니다.")
+                            # Add a slight delay to show the success message before clearing the form
+                            import time
+                            time.sleep(1)
                             st.rerun()
                         else:
                             st.error("❌ 요청 등록에 실패했습니다. 다시 시도해주세요.")
@@ -4604,6 +4881,16 @@ else:
     # [FIX] Global Injection of Button Status Colors
     # Calling it at the end ensures all UI elements are rendered and observer is attached.
     inject_button_color_script()
+
+    # [FEATURE] Sidebar System Status
+    total_records = len(base_df) if 'base_df' in locals() else 0
+    st.sidebar.markdown(f"""
+    ---
+    **🖥️ 시스템 정보**
+    - 데이터 총 건수: `{total_records:,}건`
+    - 최신 배포 버전: `v20260407-1545`
+    - 엔진: Streamlit / Python 3.12
+    """)
 
 # Main execution completed by top-level script
 pass
